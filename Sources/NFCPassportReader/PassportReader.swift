@@ -353,7 +353,7 @@ extension PassportReader {
 
         self.updateReaderSessionMessage( alertMessage: NFCViewDisplayMessage.readingDataGroupProgress(.COM, 0) )
         
-        if let com = try await readDataGroup(tagReader:tagReader, dgId:.COM) as? COM {
+        if let com = try await readDataGroup(tagReader: tagReader, dgId: .COM, as: COM.self) {
             self.passport.addDataGroup( .COM, dataGroup:com )
             self.addDatagroupsToRead(com: com, to: &DGsToRead)
         }
@@ -365,7 +365,7 @@ extension PassportReader {
                 DGsToRead.removeAll { $0 == .DG14 }
 
                 // Do Chip Authentication
-                if let dg14 = try await readDataGroup(tagReader:tagReader, dgId:.DG14) as? DataGroup14 {
+                if let dg14 = try await readDataGroup(tagReader: tagReader, dgId: .DG14, as: DataGroup14.self) {
                     self.passport.addDataGroup( .DG14, dataGroup:dg14 )
                     let caHandler = ChipAuthenticationHandler(dg14: dg14, tagReader: tagReader)
                      
@@ -403,6 +403,14 @@ extension PassportReader {
     }
     
     func readDataGroup( tagReader : TagReader, dgId : DataGroupId ) async throws -> DataGroup?  {
+        try await readDataGroup(tagReader: tagReader, dgId: dgId, as: DataGroup.self)
+    }
+
+    func readDataGroup<T: DataGroup>(
+        tagReader: TagReader,
+        dgId: DataGroupId,
+        as type: T.Type
+    ) async throws -> T? {
 
         self.currentlyReadingDataGroup = dgId
         Logger.passportReader.info( "Reading tag - \(dgId.getName())" )
@@ -414,8 +422,7 @@ extension PassportReader {
         repeat {
             do {
                 let response = try await tagReader.readDataGroup(dataGroup:dgId)
-                let dg = try DataGroupParser().parseDG(data: response)
-                return dg
+                return try DataGroupParser().parseDG(data: response, as: T.self)
             } catch let error as NFCPassportReaderError {
                 Logger.passportReader.error( "TagError reading tag - \(error)" )
                 nfcPassportReaderError = error

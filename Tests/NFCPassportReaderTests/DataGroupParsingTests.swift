@@ -27,6 +27,33 @@ final class DataGroupParsingTests: XCTestCase {
             XCTAssertTrue( dg is DataGroup1 )
         }
     }
+
+    func testGenericDatagroupParsing() throws {
+        let mrz = "P<GBRTHATCHER<<BOB<<<<<<<<<<<<<<<<<<<<<<<<<<7125143269GBR3906022M1601013<<<<<<<<<<<<<<08"
+        let mrzBin = [UInt8](mrz.data(using: .utf8)!)
+        let tag = try [0x5F,0x1F] + toAsn1Length(mrzBin.count) + mrzBin
+        let dg1Data = try [0x61] + toAsn1Length(tag.count) + tag
+
+        let dg1: DataGroup1 = try DataGroupParser().parseDG(data: dg1Data, as: DataGroup1.self)
+
+        XCTAssertEqual(dg1.datagroupType, .DG1)
+    }
+
+    func testGenericDatagroupParsingFailsForUnexpectedConcreteType() throws {
+        let mrz = "P<GBRTHATCHER<<BOB<<<<<<<<<<<<<<<<<<<<<<<<<<7125143269GBR3906022M1601013<<<<<<<<<<<<<<08"
+        let mrzBin = [UInt8](mrz.data(using: .utf8)!)
+        let tag = try [0x5F,0x1F] + toAsn1Length(mrzBin.count) + mrzBin
+        let dg1Data = try [0x61] + toAsn1Length(tag.count) + tag
+
+        XCTAssertThrowsError(try DataGroupParser().parseDG(data: dg1Data, as: DataGroup2.self)) { error in
+            guard case NFCPassportReaderError.InvalidDataPassed(let reason) = error else {
+                return XCTFail("Expected InvalidDataPassed, got \(error)")
+            }
+
+            XCTAssertTrue(reason.contains("Expected DataGroup2"))
+            XCTAssertTrue(reason.contains("DataGroup1"))
+        }
+    }
     
     func testDatagroup2ParsingJPEG2000() {
         

@@ -9,17 +9,37 @@ import OpenSSL
 @available(iOS 13, macOS 10.15, *)
 class DataGroupParser {
     
-    static let dataGroupNames = ["Common", "DG1", "DG2", "DG3", "DG4", "DG5", "DG6", "DG7", "DG8", "DG9", "DG10", "DG11", "DG12", "DG13", "DG14", "DG15", "DG16", "SecurityData"]
-    static let tags : [UInt8] = [0x60, 0x61, 0x75, 0x63, 0x76, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x70, 0x77]
-    static let classes : [DataGroup.Type] = [COM.self, DataGroup1.self, DataGroup2.self,
-                                      NotImplementedDG.self, NotImplementedDG.self, NotImplementedDG.self,
-                                      NotImplementedDG.self, DataGroup7.self, NotImplementedDG.self,
-                                      NotImplementedDG.self, NotImplementedDG.self, DataGroup11.self,
-                                      DataGroup12.self, NotImplementedDG.self, DataGroup14.self,
-                                      DataGroup15.self, NotImplementedDG.self, SOD.self]
+    static let dataGroupNames = DataGroupId.allCases
+        .filter { $0 != .Unknown }
+        .map(\.legacyParserName)
+
+    static let tags = DataGroupId.allCases
+        .filter { $0 != .Unknown }
+        .map { UInt8($0.rawValue) }
+
+    private static let dataGroupTypes: [DataGroupId: DataGroup.Type] = [
+        .COM: COM.self,
+        .DG1: DataGroup1.self,
+        .DG2: DataGroup2.self,
+        .DG3: NotImplementedDG.self,
+        .DG4: NotImplementedDG.self,
+        .DG5: NotImplementedDG.self,
+        .DG6: NotImplementedDG.self,
+        .DG7: DataGroup7.self,
+        .DG8: NotImplementedDG.self,
+        .DG9: NotImplementedDG.self,
+        .DG10: NotImplementedDG.self,
+        .DG11: DataGroup11.self,
+        .DG12: DataGroup12.self,
+        .DG13: NotImplementedDG.self,
+        .DG14: DataGroup14.self,
+        .DG15: DataGroup15.self,
+        .DG16: NotImplementedDG.self,
+        .SOD: SOD.self
+    ]
     
     
-    func parseDG( data : [UInt8] ) throws -> DataGroup {
+    func parseDG(data: [UInt8]) throws -> DataGroup {
         
         let header = data[0..<4]
         
@@ -27,10 +47,26 @@ class DataGroupParser {
 
         return try dg.init(data)
     }
+
+    func parseDG<T: DataGroup>(data: [UInt8], as type: T.Type = T.self) throws -> T {
+        let dataGroup = try parseDG(data: data)
+        guard let typedDataGroup = dataGroup as? T else {
+            throw NFCPassportReaderError.InvalidDataPassed(
+                "Expected \(T.self) but decoded \(Swift.type(of: dataGroup))"
+            )
+        }
+        return typedDataGroup
+    }
     
     
-    func tagToDG( _ tag : UInt8 ) throws -> DataGroup.Type {
-        guard let index = DataGroupParser.tags.firstIndex(of: tag) else { throw NFCPassportReaderError.UnknownTag}
-        return DataGroupParser.classes[index]
+    func tagToDG(_ tag: UInt8) throws -> DataGroup.Type {
+        guard
+            let dataGroupId = DataGroupId(tag: tag),
+            let dataGroupType = DataGroupParser.dataGroupTypes[dataGroupId]
+        else {
+            throw NFCPassportReaderError.UnknownTag
+        }
+
+        return dataGroupType
     }
 }

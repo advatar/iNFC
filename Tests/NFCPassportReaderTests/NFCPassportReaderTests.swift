@@ -1,7 +1,10 @@
 import XCTest
-import CoreNFC
 import OpenSSL
 import OSLog
+
+#if canImport(CoreNFC)
+import CoreNFC
+#endif
 
 @testable import NFCPassportReader
 
@@ -158,6 +161,7 @@ final class NFCPassportReaderTests: XCTestCase {
         XCTAssertEqual( val, "maryhadalittlelambaaaaaa" )
     }
     
+#if canImport(CoreNFC)
     func testSecureMessagingProtect() {
         
         let KSenc = hexRepToBin("8FDCFE759E40A4DF4575160B3BFB79FB")
@@ -218,6 +222,7 @@ final class NFCPassportReaderTests: XCTestCase {
 
         }
     }
+#endif
     
     
     func testConvertECDSAPlainTODer() {
@@ -247,15 +252,24 @@ final class NFCPassportReaderTests: XCTestCase {
     }
 
     
-    static var allTests = [
-        ("testBinToHexRep", testBinToHexRep),
-        ("testHexRepToBin", testHexRepToBin),
-        ("testAsn1Length", testAsn1Length),
-        ("testToASNLength", testToASNLength),
-        ("testDES3Encryption", testDES3Encryption),
-        ("testDES3Decryption", testDES3Decryption),
-        ("testSecureMessagingProtect", testSecureMessagingProtect),
-        ("testSecureMessagingUnprotectNoData", testSecureMessagingUnprotectNoData),
-        ("testSecureMessagingUnprotectWithData", testSecureMessagingUnprotectWithData),
-    ]
+    static var allTests: [(String, (NFCPassportReaderTests) -> () -> Void)] {
+        var tests: [(String, (NFCPassportReaderTests) -> () -> Void)] = [
+            ("testBinToHexRep", testBinToHexRep),
+            ("testHexRepToBin", testHexRepToBin),
+            ("testAsn1Length", testAsn1Length),
+            ("testToASNLength", testToASNLength),
+            ("testDES3Encryption", testDES3Encryption),
+            ("testDES3Decryption", testDES3Decryption),
+        ]
+
+#if canImport(CoreNFC)
+        tests.append(contentsOf: [
+            ("testSecureMessagingProtect", testSecureMessagingProtect),
+            ("testSecureMessagingUnprotectNoData", testSecureMessagingUnprotectNoData),
+            ("testSecureMessagingUnprotectWithData", testSecureMessagingUnprotectWithData),
+        ])
+#endif
+
+        return tests
+    }
 }
