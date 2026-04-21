@@ -447,7 +447,7 @@ public class NFCPassportModel {
         // Now Verify passport data by comparing compare Hashes in SOD against
         // computed hashes to ensure data not been tampered with
         passportDataNotTampered = false
-        let asn1Data = try OpenSSLUtils.ASN1Parse( data: signedData )
+        let asn1Data = try ASN1DERParser.dump(data: signedData)
         let (sodHashAlgorythm, sodHashes) = try parseSODSignatureContent( asn1Data )
         
         var errors : String = ""

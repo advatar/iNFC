@@ -297,31 +297,6 @@ public class OpenSSLUtils {
         return encapsulatedContent
     }
     
-    /// Parses a signed data structures encoded in ASN1 format and returns the structure in text format
-    /// - Parameter data: The data to be parsed in ASN1 format
-    /// - Returns: The parsed data as A String
-    static func ASN1Parse( data: Data ) throws -> String {
-        
-        guard let out = BIO_new(BIO_s_mem()) else { throw OpenSSLError.UnableToParseASN1("Unable to allocate output buffer") }
-        defer { BIO_free(out) }
-        
-        var parsed : String = ""
-        let _ = try data.withUnsafeBytes { (ptr) in
-            let rc = ASN1_parse_dump(out, ptr.baseAddress?.assumingMemoryBound(to: UInt8.self), data.count, 0, 0)
-            if rc == 0 {
-                let str = OpenSSLUtils.getOpenSSLError()
-                Logger.openSSL.debug( "Failed to parse ASN1 Data - \(str)" )
-                throw OpenSSLError.UnableToParseASN1("Failed to parse ASN1 Data - \(str)")
-            }
-            
-            parsed = bioToString(bio: out)
-        }
-        
-        return parsed
-    }
-    
-    
-    
     /// Reads an RSA Public Key  in DER  format and converts it to an OpenSSL EVP_PKEY value for use whilst decrypting or verifying an RSA signature
     /// - Parameter data: The RSA key in DER format
     /// - Returns: The EVP_PKEY value
@@ -547,46 +522,6 @@ public class OpenSSLUtils {
         }
         
         return true
-    }
-
-    @available(iOS 13, macOS 10.15, *)
-    static func generateAESCMAC( key: [UInt8], message : [UInt8] ) -> [UInt8] {
-        let ctx = CMAC_CTX_new();
-        defer { CMAC_CTX_free(ctx) }
-        var key = key
-        
-        var mac = [UInt8](repeating: 0, count: 32)
-        var maclen : Int = 0
-        
-        if key.count == 16 {
-            CMAC_Init(ctx, &key, key.count, EVP_aes_128_cbc(), nil)
-        } else if key.count == 24 {
-            CMAC_Init(ctx, &key, key.count, EVP_aes_192_cbc(), nil)
-        } else if key.count == 32 {
-            CMAC_Init(ctx, &key, key.count, EVP_aes_256_cbc(), nil)
-        }
-        CMAC_Update(ctx, message, message.count);
-        CMAC_Final(ctx, &mac, &maclen);
-        
-        Logger.openSSL.debug( "aesMac - mac - \(binToHexRep(mac))" )
-        
-        return [UInt8](mac[0..<maclen])
-    }
-    
-    @available(iOS 13, macOS 10.15, *)
-    static func asn1EncodeOID (oid : String) -> [UInt8] {
-        
-        let obj = OBJ_txt2obj( oid.cString(using: .utf8), 1)
-        let payloadLen = i2d_ASN1_OBJECT(obj, nil)
-        
-        var data  = [UInt8](repeating: 0, count: Int(payloadLen))
-        
-        let _ = data.withUnsafeMutableBytes { (ptr) in
-            var newPtr = ptr.baseAddress?.assumingMemoryBound(to: UInt8.self)
-            _ = i2d_ASN1_OBJECT(obj, &newPtr)
-        }
-        
-        return data
     }
 
     @available(iOS 13, macOS 10.15, *)

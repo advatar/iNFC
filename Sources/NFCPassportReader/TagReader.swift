@@ -9,19 +9,26 @@
 import Foundation
 import OSLog
 
-#if !os(macOS)
+#if canImport(CoreNFC)
 import CoreNFC
+#endif
 
-@available(iOS 15, *)
+@available(iOS 15, macOS 11, *)
 public class TagReader {
-    var tag : NFCISO7816Tag
+    private let transport: APDUTransport
     var secureMessaging : SecureMessaging?
     var maxDataLengthToRead : Int = 0xA0  // Should be able to use 256 to read arbitrary amounts of data at full speed BUT this isn't supported across all passports so for reliability just use the smaller amount.
 
     var progress : ((Int)->())?
 
-    init( tag: NFCISO7816Tag ) {
-        self.tag = tag
+#if canImport(CoreNFC)
+    convenience init(tag: NFCISO7816Tag) {
+        self.init(transport: CoreNFCAPDUTransport(tag: tag))
+    }
+#endif
+
+    init(transport: APDUTransport) {
+        self.transport = transport
     }
     
     func overrideDataAmountToRead( newAmount : Int ) {
@@ -202,7 +209,7 @@ public class TagReader {
         try await send(cmd: APDUCommand.selectFile(tag))
     }
 
-    func send( cmd: NFCISO7816APDU, useExtendedMode : Bool = false ) async throws -> ResponseAPDU {
+    func send( cmd: APDU, useExtendedMode : Bool = false ) async throws -> ResponseAPDU {
         Logger.tagReader.debug( "TagReader - sending \(cmd)" )
         var toSend = cmd
         if let sm = secureMessaging {
@@ -210,17 +217,21 @@ public class TagReader {
             Logger.tagReader.debug("TagReader - [SM] \(toSend)" )
         }
         
-        var (data, sw1, sw2) = try await tag.sendCommand(apdu: toSend)
+        var transportResponse = try await transport.send(toSend)
+        var data = transportResponse.data
+        var sw1 = transportResponse.sw1
+        var sw2 = transportResponse.sw2
         Logger.tagReader.debug( "TagReader - Received response, size \(data.count)b" )
 
         // Some commands may have bigger response than expected. Read the whole response using INS 0xC0 (GET RESPONSE).
         while sw1 == 0x61 {
             let getResponseCmd = APDUCommand.getResponse(expectedResponseLength: Int(sw2))
-            let nextSegment: Data
             // Overwrite sw1 and sw2.
-            (nextSegment, sw1, sw2) = try await tag.sendCommand(apdu: getResponseCmd)
-            Logger.tagReader.debug("Read remaining data. Accumulated: \(data.count + nextSegment.count)b. Last batch \(nextSegment.count)b. Still remaining: \(sw2)b")
-            data += nextSegment
+            transportResponse = try await transport.send(getResponseCmd)
+            sw1 = transportResponse.sw1
+            sw2 = transportResponse.sw2
+            Logger.tagReader.debug("Read remaining data. Accumulated: \(data.count + transportResponse.data.count)b. Last batch \(transportResponse.data.count)b. Still remaining: \(sw2)b")
+            data += transportResponse.data
         }
 
         var rep = ResponseAPDU(data: [UInt8](data), sw1: sw1, sw2: sw2)
@@ -242,5 +253,3 @@ public class TagReader {
         return rep
     }
 }
-
-#endif

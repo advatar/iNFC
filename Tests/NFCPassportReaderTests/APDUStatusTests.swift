@@ -9,7 +9,6 @@ final class APDUStatusTests: XCTestCase {
         XCTAssertFalse(APDUStatus(sw1: 0x63, sw2: 0x00).isSuccess)
     }
 
-#if !os(macOS)
     func testInvalidSecretCodeMapsToInvalidMRZKey() {
         let response = ResponseAPDU(data: [], sw1: 0x63, sw2: 0x00)
 
@@ -33,5 +32,4 @@ final class APDUStatusTests: XCTestCase {
             XCTAssertEqual(sw2, 0x82)
         }
     }
-#endif
 }

@@ -18,6 +18,7 @@ let package = Package(
     dependencies: [
         // Dependencies declare other packages that this package depends on.
         // .package(url: /* package url */, from: "1.0.0"),
+        .package(url: "https://github.com/apple/swift-asn1.git", .upToNextMinor(from: "1.3.2")),
         .package(url: "https://github.com/krzyzanowskim/OpenSSL-Package.git", .upToNextMinor(from: "3.3.1000")),
     ],
     targets: [
@@ -26,6 +27,7 @@ let package = Package(
         .target(
             name: "NFCPassportReader",
             dependencies: [
+              .product(name: "SwiftASN1", package: "swift-asn1"),
               .product(name: "OpenSSL", package: "OpenSSL-Package")
             ],
             resources: [
@@ -34,8 +36,7 @@ let package = Package(
         .testTarget(
             name: "NFCPassportReaderTests",
             dependencies: [
-              "NFCPassportReader",
-              .product(name: "OpenSSL", package: "OpenSSL-Package")
+              "NFCPassportReader"
             ]),
     ]
 )

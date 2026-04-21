@@ -6,9 +6,7 @@
 //  Copyright © 2021 Andy Qua. All rights reserved.
 //
 
-#if !os(macOS)
-
-@available(iOS 13, *)
+@available(iOS 13, macOS 10.15, *)
 public struct ResponseAPDU {
     
     public var data : [UInt8]
@@ -21,5 +19,3 @@ public struct ResponseAPDU {
         self.sw2 = sw2
     }
 }
-
-#endif

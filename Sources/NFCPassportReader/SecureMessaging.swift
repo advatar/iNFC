@@ -14,16 +14,12 @@ public enum SecureMessagingSupportedAlgorithms {
     case AES
 }
 
-#if !os(macOS)
-import CoreNFC
-
-
 /// This class implements the secure messaging protocol.
 /// The class is a new layer that comes between the reader and the iso7816.
 /// It gives a new transmit method that takes an APDU object formed by the iso7816 layer,
 /// ciphers it following the doc9303 specification, sends the ciphered APDU to the reader
 /// layer and returns the unciphered APDU.
-@available(iOS 13, *)
+@available(iOS 13, macOS 10.15, *)
 public class SecureMessaging {
     private var ksenc : [UInt8]
     private var ksmac : [UInt8]
@@ -40,7 +36,7 @@ public class SecureMessaging {
     }
 
     /// Protect the apdu following the doc9303 specification
-    func protect(apdu : NFCISO7816APDU, useExtendedMode: Bool = false ) throws -> NFCISO7816APDU {
+    func protect(apdu : APDU, useExtendedMode: Bool = false ) throws -> APDU {
     
         Logger.secureMessaging.debug("\t\tSSC: \(binToHexRep(self.ssc))")
         self.ssc = self.incSSC()
@@ -54,7 +50,7 @@ public class SecureMessaging {
         var do97 : [UInt8] = []
         
         var tmp = "Concatenate CmdHeader"
-        if apdu.data != nil {
+        if !apdu.data.isEmpty {
             tmp += " and DO87"
             do87 = try self.buildD087(apdu: apdu)
         }
@@ -106,7 +102,9 @@ public class SecureMessaging {
         Logger.secureMessaging.debug("Construct and send protected APDU")
         Logger.secureMessaging.debug("\tProtectedAPDU: \(binToHexRep(protectedAPDU))")
         
-        let newAPDU = NFCISO7816APDU(data:Data(protectedAPDU))!
+        guard let newAPDU = APDU(data: Data(protectedAPDU)) else {
+            throw NFCPassportReaderError.UnexpectedError
+        }
         return newAPDU
     }
 
@@ -193,7 +191,7 @@ public class SecureMessaging {
             Logger.secureMessaging.debug("\tCompute MAC with KSmac")
             var CCb = mac(algoName: algoName, key: self.ksmac, msg: K)
             if CCb.count > 8 {
-                CCb = [UInt8](CC[0..<8])
+                CCb = [UInt8](CCb[0..<8])
             }
             Logger.secureMessaging.debug("\t\tCC: \(binToHexRep(CCb))")
             
@@ -232,14 +230,14 @@ public class SecureMessaging {
         return ResponseAPDU(data: data, sw1: sw1, sw2: sw2)
     }
 
-    func maskClassAndPad(apdu : NFCISO7816APDU ) -> [UInt8] {
+    func maskClassAndPad(apdu : APDU ) -> [UInt8] {
         Logger.secureMessaging.debug("Mask class byte and pad command header")
         let res = pad([0x0c, apdu.instructionCode, apdu.p1Parameter, apdu.p2Parameter], blockSize: padLength)
         Logger.secureMessaging.debug("\tCmdHeader: \(binToHexRep(res))")
         return res
     }
     
-    func buildD087(apdu : NFCISO7816APDU) throws -> [UInt8] {
+    func buildD087(apdu : APDU) throws -> [UInt8] {
         let cipher = [0x01] + self.padAndEncryptData(apdu)
         let res = try [0x87] + toAsn1Length(cipher.count) + cipher
         Logger.secureMessaging.debug("Build DO'87")
@@ -247,9 +245,9 @@ public class SecureMessaging {
         return res
     }
     
-    func padAndEncryptData(_ apdu : NFCISO7816APDU) -> [UInt8] {
+    func padAndEncryptData(_ apdu : APDU) -> [UInt8] {
         // Pad the data, encrypt data with KSenc and build DO'87
-        let data = [UInt8](apdu.data!)
+        let data = [UInt8](apdu.data)
         let paddedData = pad( data, blockSize: padLength )
         
         let enc : [UInt8]
@@ -284,7 +282,7 @@ public class SecureMessaging {
         return res
     }
 
-    func buildD097(apdu : NFCISO7816APDU) throws -> [UInt8] {
+    func buildD097(apdu : APDU) throws -> [UInt8] {
         let le = apdu.expectedResponseLength
         var binLe = intToBin(le)
         if (le == 256 || le == 65536) {
@@ -298,4 +296,3 @@ public class SecureMessaging {
     }
     
 }
-#endif

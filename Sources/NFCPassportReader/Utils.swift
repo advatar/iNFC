@@ -208,8 +208,12 @@ public func desMAC(key : [UInt8], msg : [UInt8]) -> [UInt8]{
 
 @available(iOS 13, macOS 10.15, *)
 public func aesMAC( key: [UInt8], msg : [UInt8] ) -> [UInt8] {
-    let mac = OpenSSLUtils.generateAESCMAC( key: key, message:msg )
-    return mac
+    do {
+        return try AESCMAC.authenticate(message: msg, key: key)
+    } catch {
+        Logger.passportReader.error("AES-CMAC failed: \(String(describing: error))")
+        return []
+    }
 }
 
 @available(iOS 13, macOS 10.15, *)
@@ -249,7 +253,13 @@ public func intToBytes( val: Int, removePadding:Bool) -> [UInt8] {
 
 @available(iOS 13, macOS 10.15, *)
 public func oidToBytes(oid : String, replaceTag : Bool) -> [UInt8] {
-    var encOID = OpenSSLUtils.asn1EncodeOID(oid: oid)
+    var encOID: [UInt8]
+    do {
+        encOID = try ASN1DERParser.encodeObjectIdentifier(oid)
+    } catch {
+        Logger.passportReader.error("Failed to encode OID \(oid): \(String(describing: error))")
+        return []
+    }
     
     if replaceTag {
         // Replace tag (0x06) with 0x80
@@ -427,4 +437,3 @@ public func calcSHA384Hash( _ data: [UInt8] ) -> [UInt8] {
     fatalError("Couldn't import CryptoKit")
     #endif
 }
-

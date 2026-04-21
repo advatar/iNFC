@@ -1,11 +1,28 @@
-#if canImport(CoreNFC)
-import CoreNFC
 import XCTest
 
 @testable import NFCPassportReader
 
 @available(iOS 15, *)
 final class APDUCommandTests: XCTestCase {
+    func testAPDUParsesShortEncodedCommand() {
+        let command = APDU(data: Data([0x00, 0xA4, 0x02, 0x0C, 0x02, 0x01, 0x1E, 0x00]))
+
+        XCTAssertEqual(command?.instructionClass, 0x00)
+        XCTAssertEqual(command?.instructionCode, 0xA4)
+        XCTAssertEqual(command?.p1Parameter, 0x02)
+        XCTAssertEqual(command?.p2Parameter, 0x0C)
+        XCTAssertEqual(command?.data, Data([0x01, 0x1E]))
+        XCTAssertEqual(command?.expectedResponseLength, 0)
+    }
+
+    func testAPDUParsesExtendedResponseLength() {
+        let command = APDU(data: Data([0x00, 0xB0, 0x00, 0x00, 0x00, 0x00, 0x04]))
+
+        XCTAssertEqual(command?.instructionCode, 0xB0)
+        XCTAssertEqual(command?.data, Data())
+        XCTAssertEqual(command?.expectedResponseLength, 4)
+    }
+
     func testGetChallengeBuildsExpectedCommand() {
         let command = APDUCommand.getChallenge
 
@@ -45,4 +62,3 @@ final class APDUCommandTests: XCTestCase {
         XCTAssertEqual(last.instructionCode, 0x86)
     }
 }
-#endif

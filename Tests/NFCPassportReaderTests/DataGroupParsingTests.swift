@@ -7,7 +7,6 @@
 
 import Foundation
 import XCTest
-import OpenSSL
 
 @testable import NFCPassportReader
 

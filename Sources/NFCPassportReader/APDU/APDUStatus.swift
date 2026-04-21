@@ -115,8 +115,7 @@ struct APDUStatus: Equatable, Sendable {
     ]
 }
 
-#if !os(macOS)
-@available(iOS 13, *)
+@available(iOS 13, macOS 10.15, *)
 extension ResponseAPDU {
     var status: APDUStatus {
         APDUStatus(sw1: sw1, sw2: sw2)
@@ -134,4 +133,3 @@ extension ResponseAPDU {
 
     func discardResponse() {}
 }
-#endif

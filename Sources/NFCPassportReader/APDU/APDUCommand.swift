@@ -5,16 +5,13 @@
 
 import Foundation
 
-#if !os(macOS)
-import CoreNFC
-
-@available(iOS 15, *)
+@available(iOS 15, macOS 11, *)
 enum APDUCommand {
     private static let instructionClass: UInt8 = 0x00
     private static let commandChainingInstructionClass: UInt8 = 0x10
 
-    static var getChallenge: NFCISO7816APDU {
-        NFCISO7816APDU(
+    static var getChallenge: APDU {
+        APDU(
             instructionClass: instructionClass,
             instructionCode: 0x84,
             p1Parameter: 0x00,
@@ -24,8 +21,8 @@ enum APDUCommand {
         )
     }
 
-    static func internalAuthentication(challenge: [UInt8], useExtendedMode: Bool) -> NFCISO7816APDU {
-        NFCISO7816APDU(
+    static func internalAuthentication(challenge: [UInt8], useExtendedMode: Bool) -> APDU {
+        APDU(
             instructionClass: instructionClass,
             instructionCode: 0x88,
             p1Parameter: 0x00,
@@ -35,8 +32,8 @@ enum APDUCommand {
         )
     }
 
-    static func mutualAuthentication(data: Data) -> NFCISO7816APDU {
-        NFCISO7816APDU(
+    static func mutualAuthentication(data: Data) -> APDU {
+        APDU(
             instructionClass: instructionClass,
             instructionCode: 0x82,
             p1Parameter: 0x00,
@@ -46,8 +43,8 @@ enum APDUCommand {
         )
     }
 
-    static func mseKeyAgreementTemplate(keyData: Data, idData: Data?) -> NFCISO7816APDU {
-        NFCISO7816APDU(
+    static func mseKeyAgreementTemplate(keyData: Data, idData: Data?) -> APDU {
+        APDU(
             instructionClass: instructionClass,
             instructionCode: 0x22,
             p1Parameter: 0x41,
@@ -57,7 +54,7 @@ enum APDUCommand {
         )
     }
 
-    static func mseSetATForInternalAuthentication(oid: String, keyId: Int?) -> NFCISO7816APDU {
+    static func mseSetATForInternalAuthentication(oid: String, keyId: Int?) -> APDU {
         let oidBytes = oidToBytes(oid: oid, replaceTag: true)
 
         let data: [UInt8]
@@ -68,7 +65,7 @@ enum APDUCommand {
             data = oidBytes
         }
 
-        return NFCISO7816APDU(
+        return APDU(
             instructionClass: instructionClass,
             instructionCode: 0x22,
             p1Parameter: 0x41,
@@ -78,10 +75,10 @@ enum APDUCommand {
         )
     }
 
-    static func mseSetATForMutualAuthentication(oid: String, keyType: UInt8) -> NFCISO7816APDU {
+    static func mseSetATForMutualAuthentication(oid: String, keyType: UInt8) -> APDU {
         let data = oidToBytes(oid: oid, replaceTag: true) + wrapDO(b: 0x83, arr: [keyType])
 
-        return NFCISO7816APDU(
+        return APDU(
             instructionClass: instructionClass,
             instructionCode: 0x22,
             p1Parameter: 0xC1,
@@ -91,8 +88,8 @@ enum APDUCommand {
         )
     }
 
-    static func generalAuthenticate(wrappedData: Data, expectedResponseLength: Int, isLast: Bool) -> NFCISO7816APDU {
-        NFCISO7816APDU(
+    static func generalAuthenticate(wrappedData: Data, expectedResponseLength: Int, isLast: Bool) -> APDU {
+        APDU(
             instructionClass: isLast ? instructionClass : commandChainingInstructionClass,
             instructionCode: 0x86,
             p1Parameter: 0x00,
@@ -102,8 +99,8 @@ enum APDUCommand {
         )
     }
 
-    static var selectMasterFile: NFCISO7816APDU {
-        NFCISO7816APDU(
+    static var selectMasterFile: APDU {
+        APDU(
             instructionClass: instructionClass,
             instructionCode: 0xA4,
             p1Parameter: 0x00,
@@ -113,8 +110,8 @@ enum APDUCommand {
         )
     }
 
-    static var selectPassportApplication: NFCISO7816APDU {
-        NFCISO7816APDU(
+    static var selectPassportApplication: APDU {
+        APDU(
             instructionClass: instructionClass,
             instructionCode: 0xA4,
             p1Parameter: 0x04,
@@ -124,22 +121,33 @@ enum APDUCommand {
         )
     }
 
-    static func selectFile(_ fileId: [UInt8]) throws -> NFCISO7816APDU {
-        guard let command = NFCISO7816APDU(data: Data([0x00, 0xA4, 0x02, 0x0C, 0x02] + fileId)) else {
+    static func selectFile(_ fileId: [UInt8]) throws -> APDU {
+        guard fileId.count == 2 else {
             throw NFCPassportReaderError.UnexpectedError
         }
-        return command
+        return APDU(
+            instructionClass: instructionClass,
+            instructionCode: 0xA4,
+            p1Parameter: 0x02,
+            p2Parameter: 0x0C,
+            data: Data(fileId),
+            expectedResponseLength: -1
+        )
     }
 
-    static func readBinaryHeader() throws -> NFCISO7816APDU {
-        guard let command = NFCISO7816APDU(data: Data([0x00, 0xB0, 0x00, 0x00, 0x00, 0x00, 0x04])) else {
-            throw NFCPassportReaderError.UnexpectedError
-        }
-        return command
+    static func readBinaryHeader() throws -> APDU {
+        APDU(
+            instructionClass: instructionClass,
+            instructionCode: 0xB0,
+            p1Parameter: 0x00,
+            p2Parameter: 0x00,
+            data: Data(),
+            expectedResponseLength: 4
+        )
     }
 
-    static func readBinary(offset: [UInt8], expectedResponseLength: Int) -> NFCISO7816APDU {
-        NFCISO7816APDU(
+    static func readBinary(offset: [UInt8], expectedResponseLength: Int) -> APDU {
+        APDU(
             instructionClass: instructionClass,
             instructionCode: 0xB0,
             p1Parameter: offset[0],
@@ -149,8 +157,8 @@ enum APDUCommand {
         )
     }
 
-    static func getResponse(expectedResponseLength: Int) -> NFCISO7816APDU {
-        NFCISO7816APDU(
+    static func getResponse(expectedResponseLength: Int) -> APDU {
+        APDU(
             instructionClass: instructionClass,
             instructionCode: 0xC0,
             p1Parameter: 0x00,
@@ -160,5 +168,3 @@ enum APDUCommand {
         )
     }
 }
-
-#endif
