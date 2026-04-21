@@ -546,21 +546,17 @@ extension PACEHandler {
     /// - Throws: An error if we are unable to encode the public key data
     /// - Returns: The authentication token (8 bytes)
     func generateAuthenticationToken( publicKey: OpaquePointer, macKey: [UInt8] ) throws -> [UInt8] {
-        var encodedPublicKeyData = try encodePublicKey(oid:self.paceOID, key:publicKey)
-        
-        if cipherAlg == "DESede" {
-            // If DESede (3DES), we need to pad the data
-            encodedPublicKeyData = pad(encodedPublicKeyData, blockSize: 8)
-        }
+        let encodedPublicKeyData = try encodePublicKey(oid:self.paceOID, key:publicKey)
         
         Logger.pace.debug( "Generating Authentication Token" )
         Logger.pace.debug( "EncodedPubKey = \(binToHexRep(encodedPublicKeyData, asArray: true))" )
         Logger.pace.debug( "macKey = \(binToHexRep(macKey, asArray: true))" )
 
-        let maccedPublicKeyDataObject = mac(algoName: cipherAlg == "DESede" ? .DES : .AES, key: macKey, msg: encodedPublicKeyData)
-
-        // Take 8 bytes for auth token
-        let authToken = [UInt8](maccedPublicKeyDataObject[0..<8])
+        let authToken = try PACEAuthenticationToken.generate(
+            encodedPublicKeyData: encodedPublicKeyData,
+            macKey: macKey,
+            cipherAlgorithm: cipherAlg
+        )
         Logger.pace.debug( "Generated authToken = \(binToHexRep(authToken, asArray: true))" )
         return authToken
     }
@@ -572,28 +568,20 @@ extension PACEHandler {
     /// - Throws: Error if unable to encode
     /// - Returns: the encoded public key in tlv format
     func encodePublicKey( oid : String, key : OpaquePointer ) throws -> [UInt8] {
-        let encodedOid = oidToBytes(oid:oid, replaceTag: false)
         guard let pubKeyData = OpenSSLUtils.getPublicKeyData(from: key) else {
             Logger.pace.error( "PACEHandler: encodePublicKey() - Unable to get public key data" )
             throw NFCPassportReaderError.InvalidDataPassed("Unable to get public key data")
         }
 
         let keyType = EVP_PKEY_get_base_id( key )
-        let tag : TKTLVTag
-        if keyType == EVP_PKEY_DH || keyType == EVP_PKEY_DHX {
-            tag = 0x84
-        } else {
-            tag = 0x86
-        }
+        let keyAgreementAlgorithm: PACEAuthenticationToken.KeyAgreementAlgorithm =
+            keyType == EVP_PKEY_DH || keyType == EVP_PKEY_DHX ? .dh : .ecdh
 
-        guard let encOid = TKBERTLVRecord(from: Data(encodedOid)) else {
-            throw NFCPassportReaderError.InvalidASN1Value
-        }
-        let encPub = TKBERTLVRecord(tag:tag, value: Data(pubKeyData))
-        let record = TKBERTLVRecord(tag: 0x7F49, records:[encOid, encPub])
-        let data = record.data
-
-        return [UInt8](data)
+        return try PACEAuthenticationToken.encodePublicKey(
+            protocolOID: oid,
+            publicKeyData: pubKeyData,
+            keyAgreementAlgorithm: keyAgreementAlgorithm
+        )
     }
 
     /// Computes a key seed based on an MRZ key

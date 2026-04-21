@@ -25,6 +25,7 @@ This pass keeps the public API and the existing PACE/Chip Authentication behavio
 - `Package.swift` now makes `NFCPassportReaderTests` depend on `NFCPassportReader`, so the iOS test scheme is buildable.
 - Apple `swift-asn1` now backs DER parsing and OID encoding instead of OpenSSL dump/OBJ helpers.
 - AES-CMAC is implemented in Swift over CommonCrypto AES and covered by RFC 4493 test vectors.
+- PACE authentication-token input encoding and token truncation now live in a CoreNFC-free Swift helper, leaving OpenSSL only responsible for the remaining key-object and key-agreement work.
 - `APDUTransport` separates CoreNFC transceive calls from passport file-reading logic, making GET RESPONSE continuation and chunked reads testable with scripted APDU responses.
 - `APDU`, `APDUCommand`, `ResponseAPDU`, `APDUStatus`, `SecureMessaging`, and `TagReader` now compile without CoreNFC; CoreNFC is an adapter at the hardware edge.
 - `DataGroupReadRecoveryPolicy` replaces string-based retry decisions with typed APDU status categories and recovery actions.
@@ -286,6 +287,7 @@ Not adopted:
 - Secure messaging protect/unprotect, including AES response checksum rejection.
 - SwiftASN1 OID encoding and DER diagnostic dumps.
 - AES-CMAC against RFC 4493 vectors.
+- PACE Generic Mapping deterministic behavior against [ICAO Doc 9303 Part 11](https://www.icao.int/sites/default/files/publications/DocSeries/9303_p11_cons_en.pdf) Appendix G worked examples: MRZ-derived PACE key derivation, ECDH session-key derivation, DH/ECDH authentication-token inputs, DH/ECDH authentication tokens, and representative MSE/General Authenticate APDUs.
 - Scripted APDU transport coverage for GET RESPONSE continuation and chunked file reads.
 
 The iOS simulator test scheme additionally covers package integration with CoreNFC available:
@@ -295,6 +297,7 @@ The iOS simulator test scheme additionally covers package integration with CoreN
 Recommended next coverage:
 
 - More scripted APDU transport fixtures for secure messaging, wrong-length recovery, and protected data-group failures.
-- Golden-vector tests for PACE General Mapping and Chip Authentication command sequencing.
+- Full scripted PACE General Mapping transcripts, including nonce decryption, mapping key exchange, key agreement, and secure-messaging restart.
+- Golden-vector tests for Chip Authentication command sequencing.
 - Fixture-based SOD/passive authentication verification.
 - Coverage reporting in CI through `xcodebuild test -enableCodeCoverage YES`.
