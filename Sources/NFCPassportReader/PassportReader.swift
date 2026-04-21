@@ -427,42 +427,33 @@ extension PassportReader {
                 Logger.passportReader.error( "TagError reading tag - \(error)" )
                 nfcPassportReaderError = error
 
-                // OK we had an error - depending on what happened, we may want to try to re-read this
-                // E.g. we failed to read the last Datagroup because its protected and we can't
-                let errMsg = error.value
-                Logger.passportReader.error( "ERROR - \(errMsg)" )
-                var redoBAC = false
-                if errMsg == "Session invalidated" || errMsg == "Class not supported" || errMsg == "Tag connection lost" || errMsg == "Tag response error / no response" {
-                    // Check if we have done Chip Authentication, if so, set it to nil and try to redo BAC
-                    if self.caHandler != nil {
-                        self.caHandler = nil
-                        redoBAC = true
-                    } else {
-                        // Can't go any more!
-                        throw error
+                let recoveryAction = DataGroupReadRecoveryPolicy.action(
+                    for: error,
+                    hasChipAuthentication: self.caHandler != nil
+                )
+                Logger.passportReader.error("ERROR - \(error.value), recovery action: \(String(describing: recoveryAction))")
+
+                switch recoveryAction {
+                case .resetChipAuthenticationAndRedoBAC:
+                    self.caHandler = nil
+                    try await doBACAuthentication(tagReader: tagReader)
+                case .removeRequestedDataGroupAndRedoBAC:
+                    if !self.dataGroupsToRead.isEmpty {
+                        self.dataGroupsToRead.removeFirst()
                     }
-                } else if errMsg == "Security status not satisfied" || errMsg == "File not found" {
-                    // Can't read this element as we aren't allowed - remove it and return out so we re-do BAC
-                    self.dataGroupsToRead.removeFirst()
-                    redoBAC = true
-                } else if errMsg == "SM data objects incorrect" || errMsg == "Class not supported" {
-                    // Can't read this element security objects now invalid - and return out so we re-do BAC
-                    redoBAC = true
-                } else if errMsg.hasPrefix( "Wrong length" ) || errMsg.hasPrefix( "End of file" ) {  // Should now handle errors 0x6C xx, and 0x67 0x00
-                    // OK passport can't handle max length so drop it down
+                    try await doBACAuthentication(tagReader: tagReader)
+                case .redoBAC:
+                    try await doBACAuthentication(tagReader: tagReader)
+                case .reduceReadLengthAndRedoBAC:
                     tagReader.reduceDataReadingAmount()
-                    redoBAC = true
-                } else if errMsg == "UnsupportedDataGroup" {
-                    // OK, this DataGroup is not supported, lets skip it
+                    try await doBACAuthentication(tagReader: tagReader)
+                case .skipDataGroup:
                     Logger.passportReader.debug("Unsupported DataGroup - \(dgId.rawValue)")
                     return nil
-                }
-                
-                if redoBAC {
-                    // Redo BAC and try again
-                    try await doBACAuthentication(tagReader : tagReader)
-                } else {
-                    // Some other error lets have another try
+                case .fail:
+                    throw error
+                case .retry:
+                    break
                 }
             }
             readAttempts += 1

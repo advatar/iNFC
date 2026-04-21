@@ -27,6 +27,7 @@ This pass keeps the public API and the existing PACE/Chip Authentication behavio
 - AES-CMAC is implemented in Swift over CommonCrypto AES and covered by RFC 4493 test vectors.
 - `APDUTransport` separates CoreNFC transceive calls from passport file-reading logic, making GET RESPONSE continuation and chunked reads testable with scripted APDU responses.
 - `APDU`, `APDUCommand`, `ResponseAPDU`, `APDUStatus`, `SecureMessaging`, and `TagReader` now compile without CoreNFC; CoreNFC is an adapter at the hardware edge.
+- `DataGroupReadRecoveryPolicy` replaces string-based retry decisions with typed APDU status categories and recovery actions.
 
 ## Crypto Direction
 
@@ -126,7 +127,12 @@ classDiagram
         +sw1 UInt8
         +sw2 UInt8
         +isSuccess Bool
+        +category APDUStatusCategory
         +readerError NFCPassportReaderError?
+    }
+
+    class DataGroupReadRecoveryPolicy {
+        +action(error:hasChipAuthentication:) DataGroupReadRecoveryAction
     }
 
     class DataGroupParser {
@@ -161,6 +167,7 @@ classDiagram
     PassportReader --> PACEHandler
     PassportReader --> ChipAuthenticationHandler
     PassportReader --> DataGroupParser
+    PassportReader --> DataGroupReadRecoveryPolicy
     PassportReader --> NFCPassportModel
     TagReader --> APDUCommand
     TagReader --> ResponseAPDU
@@ -275,6 +282,7 @@ Not adopted:
 - APDU success/error mapping, including the fixed `0x90 0x01` non-success case.
 - Invalid MRZ status mapping.
 - Generic data-group parsing success and type-mismatch failure.
+- Typed data-group read recovery for APDU status categories without string comparisons.
 - Secure messaging protect/unprotect, including AES response checksum rejection.
 - SwiftASN1 OID encoding and DER diagnostic dumps.
 - AES-CMAC against RFC 4493 vectors.

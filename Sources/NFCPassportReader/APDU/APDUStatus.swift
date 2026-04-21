@@ -6,18 +6,57 @@
 import Foundation
 
 @available(iOS 13, macOS 10.15, *)
+enum APDUStatusCategory: Equatable, Sendable {
+    case success
+    case responseBytesAvailable
+    case invalidMRZKey
+    case endOfFile
+    case wrongLength
+    case securityStatusNotSatisfied
+    case secureMessagingDataObjectsIncorrect
+    case fileNotFound
+    case classNotSupported
+    case other
+}
+
+@available(iOS 13, macOS 10.15, *)
 struct APDUStatus: Equatable, Sendable {
     let sw1: UInt8
     let sw2: UInt8
 
     var isSuccess: Bool {
-        sw1 == 0x90 && sw2 == 0x00
+        category == .success
+    }
+
+    var category: APDUStatusCategory {
+        switch (sw1, sw2) {
+        case (0x90, 0x00):
+            return .success
+        case (0x61, _):
+            return .responseBytesAvailable
+        case (0x63, 0x00):
+            return .invalidMRZKey
+        case (0x62, 0x82):
+            return .endOfFile
+        case (0x67, 0x00), (0x6C, _):
+            return .wrongLength
+        case (0x69, 0x82):
+            return .securityStatusNotSatisfied
+        case (0x69, 0x88):
+            return .secureMessagingDataObjectsIncorrect
+        case (0x6A, 0x82):
+            return .fileNotFound
+        case (0x6E, 0x00):
+            return .classNotSupported
+        default:
+            return .other
+        }
     }
 
     var readerError: NFCPassportReaderError? {
         guard !isSuccess else { return nil }
 
-        if sw1 == 0x63 && sw2 == 0x00 {
+        if category == .invalidMRZKey {
             return .InvalidMRZKey
         }
 
