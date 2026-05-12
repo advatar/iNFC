@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import OpenSSL
 
 @available(iOS 13, macOS 10.15,*)
 public class SecurityInfo {
@@ -89,14 +88,8 @@ public class SecurityInfo {
         if ChipAuthenticationPublicKeyInfo.checkRequiredIdentifier(oid) {
             
             let keyData : [UInt8] = [UInt8](body[requiredData.pos ..< requiredData.pos+requiredData.headerLen+requiredData.length])
-            
-            var subjectPublicKeyInfo : OpaquePointer? = nil
-            let _ = keyData.withUnsafeBytes { (ptr) in
-                var newPtr = ptr.baseAddress?.assumingMemoryBound(to: UInt8.self)
-                
-                subjectPublicKeyInfo = d2i_PUBKEY(nil, &newPtr, keyData.count)
-            }
-            
+            let subjectPublicKeyInfo = try? PassportCrypto.provider.decodeSubjectPublicKeyInfo(keyData)
+
             if let subjectPublicKeyInfo = subjectPublicKeyInfo {
                                 
                 if optionalData == nil {

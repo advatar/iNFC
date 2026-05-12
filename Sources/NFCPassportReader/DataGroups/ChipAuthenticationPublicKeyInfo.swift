@@ -10,7 +10,7 @@ import Foundation
 @available(iOS 13, macOS 10.15, *)
 public class ChipAuthenticationPublicKeyInfo : SecurityInfo {
     var oid : String
-    var pubKey : OpaquePointer
+    var pubKey : PassportPublicKey
     var keyId : Int?
     
     
@@ -19,7 +19,7 @@ public class ChipAuthenticationPublicKeyInfo : SecurityInfo {
             || ID_PK_ECDH_OID == oid
     }
     
-    init(oid:String, pubKey:OpaquePointer, keyId: Int? = nil) {
+    init(oid:String, pubKey:PassportPublicKey, keyId: Int? = nil) {
         self.oid = oid
         self.pubKey = pubKey
         self.keyId = keyId

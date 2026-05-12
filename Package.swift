@@ -19,7 +19,7 @@ let package = Package(
         // Dependencies declare other packages that this package depends on.
         // .package(url: /* package url */, from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-asn1.git", .upToNextMinor(from: "1.3.2")),
-        .package(url: "https://github.com/krzyzanowskim/OpenSSL-Package.git", .upToNextMinor(from: "3.3.1000")),
+        .package(url: "https://github.com/attaswift/BigInt.git", .upToNextMajor(from: "5.4.0")),
     ],
     targets: [
         // Targets are the basic building blocks of a package. A target can define a module or a test suite.
@@ -28,7 +28,7 @@ let package = Package(
             name: "NFCPassportReader",
             dependencies: [
               .product(name: "SwiftASN1", package: "swift-asn1"),
-              .product(name: "OpenSSL", package: "OpenSSL-Package")
+              .product(name: "BigInt", package: "BigInt")
             ],
             resources: [
                 .process("Resources/PrivacyInfo.xcprivacy")

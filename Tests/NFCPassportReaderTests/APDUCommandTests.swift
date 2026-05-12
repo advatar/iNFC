@@ -61,4 +61,46 @@ final class APDUCommandTests: XCTestCase {
         XCTAssertEqual(chained.instructionCode, 0x86)
         XCTAssertEqual(last.instructionCode, 0x86)
     }
+
+    func testMSEKeyAgreementTemplateBuildsChipAuthenticationDESCommand() {
+        let command = APDUCommand.mseKeyAgreementTemplate(
+            keyData: Data(hexRepToBin("9103AABBCC")),
+            idData: Data(hexRepToBin("840102"))
+        )
+
+        XCTAssertEqual(command.instructionClass, 0x00)
+        XCTAssertEqual(command.instructionCode, 0x22)
+        XCTAssertEqual(command.p1Parameter, 0x41)
+        XCTAssertEqual(command.p2Parameter, 0xA6)
+        XCTAssertEqual(command.data, Data(hexRepToBin("9103AABBCC840102")))
+        XCTAssertEqual(command.expectedResponseLength, 256)
+    }
+
+    func testMSESetATForInternalAuthenticationBuildsChipAuthenticationAESCommand() {
+        let command = APDUCommand.mseSetATForInternalAuthentication(
+            oid: SecurityInfo.ID_CA_ECDH_AES_CBC_CMAC_256_OID,
+            keyId: 2
+        )
+
+        XCTAssertEqual(command.instructionClass, 0x00)
+        XCTAssertEqual(command.instructionCode, 0x22)
+        XCTAssertEqual(command.p1Parameter, 0x41)
+        XCTAssertEqual(command.p2Parameter, 0xA4)
+        XCTAssertEqual(command.data, Data(hexRepToBin("800A04007F00070202030204840102")))
+        XCTAssertEqual(command.expectedResponseLength, 256)
+    }
+
+    func testMSESetATForInternalAuthenticationOmitsAbsentOrZeroKeyId() {
+        let withoutKeyId = APDUCommand.mseSetATForInternalAuthentication(
+            oid: SecurityInfo.ID_CA_ECDH_AES_CBC_CMAC_256_OID,
+            keyId: nil
+        )
+        let zeroKeyId = APDUCommand.mseSetATForInternalAuthentication(
+            oid: SecurityInfo.ID_CA_ECDH_AES_CBC_CMAC_256_OID,
+            keyId: 0
+        )
+
+        XCTAssertEqual(withoutKeyId.data, Data(hexRepToBin("800A04007F00070202030204")))
+        XCTAssertEqual(zeroKeyId.data, Data(hexRepToBin("800A04007F00070202030204")))
+    }
 }

@@ -9,7 +9,7 @@
 import Foundation
 import OSLog
 
-public enum SecureMessagingSupportedAlgorithms {
+public enum SecureMessagingSupportedAlgorithms: Equatable {
     case DES
     case AES
 }

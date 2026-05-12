@@ -8,6 +8,7 @@
 
 import Foundation
 import OSLog
+import Security
 
 #if os(iOS)
 import UIKit
@@ -170,10 +171,7 @@ public class NFCPassportModel {
 
     public var activeAuthenticationSupported : Bool {
         guard let dg15 = dataGroupsRead[.DG15] as? DataGroup15 else { return false }
-        if dg15.ecdsaPublicKey != nil || dg15.rsaPublicKey != nil {
-            return true
-        }
-        return false
+        return dg15.activeAuthenticationPublicKey != nil
     }
 
     private var certificateSigningGroups : [CertificateType:X509Wrapper] = [:]
@@ -277,11 +275,8 @@ public class NFCPassportModel {
     ///        guard let sod = model.getDataGroup(.SOD) else { return }
     ///
     /// - Parameter masterListURL: the path to the masterlist to try to verify the document signing certiifcate in the SOD
-    /// - Parameter useCMSVerification: Should we use OpenSSL CMS verification to verify the SOD content
-    ///         is correctly signed by the document signing certificate OR should we do this manully based on RFC5652
-    ///         CMS fails under certain circumstances (e.g. hashes are SHA512 whereas content is signed with SHA256RSA).
-    ///         Currently defaulting to manual verification - hoping this will replace the CMS verification totally
-    ///         CMS Verification currently there just in case
+    /// - Parameter useCMSVerification: Legacy flag retained for API compatibility. CMS signature verification
+    ///         is disabled until the native SOD verifier replaces the removed C crypto implementation.
     public func verifyPassport( masterListURL: URL?, useCMSVerification : Bool = false ) {
         if let masterListURL = masterListURL {
             do {
@@ -309,9 +304,14 @@ public class NFCPassportModel {
         // Get AA Public key
         self.activeAuthenticationPassed = false
         guard  let dg15 = self.dataGroupsRead[.DG15] as? DataGroup15 else { return }
-        if let rsaKey = dg15.rsaPublicKey {
+        guard let activeAuthenticationPublicKey = dg15.activeAuthenticationPublicKey else { return }
+
+        if activeAuthenticationPublicKey.algorithm == .rsa {
             do {
-                var decryptedSig = try OpenSSLUtils.decryptRSASignature(signature: Data(signature), pubKey: rsaKey)
+                var decryptedSig = try PassportCrypto.provider.recoverActiveAuthenticationMessage(
+                    signature: signature,
+                    using: activeAuthenticationPublicKey
+                )
                 
                 // Decrypted signature compromises of header (6A), Message, Digest hash, Trailer
                 // Trailer can be 1 byte (BC - SHA-1 hash) or 2 bytes (xxCC) - where xx identifies the hash algorithm used
@@ -367,17 +367,26 @@ public class NFCPassportModel {
             } catch {
                 Logger.passportReader.error( "Error verifying Active Authentication RSA signature - \(error)" )
             }
-        } else if let ecdsaPublicKey = dg15.ecdsaPublicKey {
+        } else if activeAuthenticationPublicKey.algorithm == .ecdsa {
             var digestType = ""
             if let dg14 = dataGroupsRead[.DG14] as? DataGroup14,
                let aa = dg14.securityInfos.compactMap({ $0 as? ActiveAuthenticationInfo }).first {
                 digestType = aa.getSignatureAlgorithmOIDString() ?? ""
             }
-            
-            if OpenSSLUtils.verifyECDSASignature( publicKey:ecdsaPublicKey, signature: signature, data: challenge, digestType: digestType ) {
-                self.activeAuthenticationPassed = true
-                Logger.passportReader.debug( "Active Authentication (ECDSA) successful" )
-            } else {
+
+            do {
+                if try PassportCrypto.provider.verifyActiveAuthenticationECDSASignature(
+                    publicKey: activeAuthenticationPublicKey,
+                    signature: signature,
+                    challenge: challenge,
+                    digestType: digestType
+                ) {
+                    self.activeAuthenticationPassed = true
+                    Logger.passportReader.debug( "Active Authentication (ECDSA) successful" )
+                } else {
+                    Logger.passportReader.error( "Error verifying Active Authentication ECDSA signature" )
+                }
+            } catch {
                 Logger.passportReader.error( "Error verifying Active Authentication ECDSA signature" )
             }
         }
@@ -403,24 +412,41 @@ public class NFCPassportModel {
 
     private func validateAndExtractSigningCertificates( masterListURL: URL ) throws {
         self.passportCorrectlySigned = false
-        
-        guard let sod = getDataGroup(.SOD) else {
+
+        guard let sod = getDataGroup(.SOD) as? SOD else {
             throw PassiveAuthenticationError.SODMissing("No SOD found" )
         }
 
-        let data = Data(sod.body)
-        let cert = try OpenSSLUtils.getX509CertificatesFromPKCS7( pkcs7Der: data ).first!
-        self.certificateSigningGroups[.documentSigningCertificate] = cert
-
-        let rc = OpenSSLUtils.verifyTrustAndGetIssuerCertificate( x509:cert, CAFile: masterListURL )
-        switch rc {
-        case .success(let csca):
-            self.certificateSigningGroups[.issuerSigningCertificate] = csca
-        case .failure(let error):
-            throw error
+        guard let documentSigningCertificate = try sod.getX509Certificates().first else {
+            throw OpenSSLError.UnableToGetX509CertificateFromPKCS7("No signing certificate found in SOD")
         }
-                
-        Logger.passportReader.debug( "Passport passed SOD Verification" )
+
+        let anchors = try X509Wrapper.certificates(fromPEMFile: masterListURL)
+        guard !anchors.isEmpty else {
+            throw OpenSSLError.UnableToVerifyX509CertificateForSOD("No certificates found in master list")
+        }
+
+        let policy = SecPolicyCreateBasicX509()
+        var optionalTrust: SecTrust?
+        let createStatus = SecTrustCreateWithCertificates(documentSigningCertificate.certificate, policy, &optionalTrust)
+        guard createStatus == errSecSuccess, let trust = optionalTrust else {
+            throw OpenSSLError.UnableToVerifyX509CertificateForSOD("Unable to create trust evaluator")
+        }
+
+        SecTrustSetAnchorCertificates(trust, anchors.map(\.certificate) as CFArray)
+        SecTrustSetAnchorCertificatesOnly(trust, true)
+
+        var error: CFError?
+        guard SecTrustEvaluateWithError(trust, &error) else {
+            let reason = error.map { CFErrorCopyDescription($0) as String? } ?? nil
+            throw OpenSSLError.UnableToVerifyX509CertificateForSOD(reason ?? "Certificate chain verification failed")
+        }
+
+        certificateSigningGroups[.documentSigningCertificate] = documentSigningCertificate
+        if SecTrustGetCertificateCount(trust) > 1,
+           let issuer = SecTrustGetCertificateAtIndex(trust, SecTrustGetCertificateCount(trust) - 1) {
+            certificateSigningGroups[.issuerSigningCertificate] = X509Wrapper(certificate: issuer)
+        }
         self.passportCorrectlySigned = true
 
     }
@@ -433,16 +459,7 @@ public class NFCPassportModel {
         // Get SOD Content and verify that its correctly signed by the Document Signing Certificate
         var signedData : Data
         documentSigningCertificateVerified = false
-        do {
-            if useCMSVerification {
-                signedData = try OpenSSLUtils.verifyAndReturnSODEncapsulatedDataUsingCMS(sod: sod)
-            } else {
-                signedData = try OpenSSLUtils.verifyAndReturnSODEncapsulatedData(sod: sod)
-            }
-            documentSigningCertificateVerified = true
-        } catch {
-            signedData = try sod.getEncapsulatedContent()
-        }
+        signedData = try sod.getEncapsulatedContent()
                 
         // Now Verify passport data by comparing compare Hashes in SOD against
         // computed hashes to ensure data not been tampered with

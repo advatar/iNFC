@@ -69,8 +69,8 @@ public class PassportReader : NSObject {
     private var masterListURL : URL?
     private var shouldNotReportNextReaderSessionInvalidationErrorUserCanceled : Bool = false
 
-    // By default, Passive Authentication uses the new RFS5652 method to verify the SOD, but can be switched to use
-    // the previous OpenSSL CMS verification if necessary
+    // Legacy switch retained for API compatibility. CMS verification is currently disabled until
+    // the native SOD verifier replaces the removed C crypto implementation.
     public var passiveAuthenticationUsesOpenSSL : Bool = false
 
     public init( masterListURL: URL? = nil ) {

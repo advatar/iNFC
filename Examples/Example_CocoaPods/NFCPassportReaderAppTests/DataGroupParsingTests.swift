@@ -7,7 +7,6 @@
 
 import Foundation
 import XCTest
-import OpenSSL
 
 @testable import NFCPassportReader
 
@@ -119,7 +118,8 @@ final class DataGroupParsingTests: XCTestCase {
             XCTAssertTrue( dg is DataGroup15 )
 
             let dg15 = dg as? DataGroup15
-            XCTAssertTrue( dg15?.ecdsaPublicKey != nil || dg15?.rsaPublicKey != nil )
+            XCTAssertNotNil(dg15?.activeAuthenticationPublicKey)
+            XCTAssertEqual(dg15?.activeAuthenticationKeyAlgorithm, .ecdsa)
         }
     }
 
