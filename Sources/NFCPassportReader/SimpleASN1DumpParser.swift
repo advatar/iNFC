@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import OpenSSL
 
 @available(iOS 13, macOS 10.15, *)
 public class ASN1Item : CustomDebugStringConvertible {
@@ -54,6 +53,16 @@ public class ASN1Item : CustomDebugStringConvertible {
             }
         }
     }
+
+    public init(pos: Int, depth: Int, headerLen: Int, length: Int, itemType: String, type: String, value: String) {
+        self.pos = pos
+        self.depth = depth
+        self.headerLen = headerLen
+        self.length = length
+        self.itemType = itemType
+        self.type = type
+        self.value = value
+    }
     
     func addChild( _ child : ASN1Item ) {
         child.parent = self
@@ -79,8 +88,8 @@ public class ASN1Item : CustomDebugStringConvertible {
     }
 }
 
-/// Very very basic ASN1 parser class - uses OpenSSL to dump an ASN1 structure to a string, and then parses that out into
-/// a tree based hieracy of ASN1Item structures - depth based
+/// Compatibility wrapper around the SwiftASN1 DER parser that preserves the
+/// existing depth-based `ASN1Item` tree used by the data-group decoders.
 @available(iOS 13, macOS 10.15, *)
 public class SimpleASN1DumpParser {
     public init() {
@@ -88,29 +97,7 @@ public class SimpleASN1DumpParser {
     }
     
     public func parse( data: Data ) throws -> ASN1Item {
-        var parsed : String = ""
-        
-
-        let _ = try data.withUnsafeBytes { (ptr) in
-            guard let out = BIO_new(BIO_s_mem()) else { throw OpenSSLError.UnableToParseASN1("Unable to allocate output buffer") }
-            defer { BIO_free(out) }
-        
-            let rc = ASN1_parse_dump(out, ptr.baseAddress?.assumingMemoryBound(to: UInt8.self), data.count, 0, 0)
-            if rc == 0 {
-                throw OpenSSLError.UnableToParseASN1("Failed to parse ASN1 Data")
-            }
-            
-            parsed = OpenSSLUtils.bioToString(bio: out)
-        }
-        
-        let lines = parsed.components(separatedBy: "\n")
-        let topItem : ASN1Item? = parseLines( lines:lines)
-        
-        guard let ret = topItem else {
-            throw OpenSSLError.UnableToParseASN1("Failed to format ASN1 Data")
-        }
-        
-        return ret
+        try ASN1DERParser.parse(data: data)
     }
     
     func parseLines( lines : [String] ) -> ASN1Item? {

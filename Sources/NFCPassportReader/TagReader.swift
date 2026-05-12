@@ -9,19 +9,26 @@
 import Foundation
 import OSLog
 
-#if !os(macOS)
+#if canImport(CoreNFC)
 import CoreNFC
+#endif
 
-@available(iOS 15, *)
+@available(iOS 15, macOS 11, *)
 public class TagReader {
-    var tag : NFCISO7816Tag
+    private let transport: APDUTransport
     var secureMessaging : SecureMessaging?
     var maxDataLengthToRead : Int = 0xA0  // Should be able to use 256 to read arbitrary amounts of data at full speed BUT this isn't supported across all passports so for reliability just use the smaller amount.
 
     var progress : ((Int)->())?
 
-    init( tag: NFCISO7816Tag ) {
-        self.tag = tag
+#if canImport(CoreNFC)
+    convenience init(tag: NFCISO7816Tag) {
+        self.init(transport: CoreNFCAPDUTransport(tag: tag))
+    }
+#endif
+
+    init(transport: APDUTransport) {
+        self.transport = transport
     }
     
     func overrideDataAmountToRead( newAmount : Int ) {
@@ -44,28 +51,16 @@ public class TagReader {
     }
     
     func getChallenge() async throws -> ResponseAPDU{
-        let cmd : NFCISO7816APDU = NFCISO7816APDU(instructionClass: 00, instructionCode: 0x84, p1Parameter: 0, p2Parameter: 0, data: Data(), expectedResponseLength: 8)
-        
-        return try await send( cmd: cmd )
+        try await send(cmd: APDUCommand.getChallenge)
     }
     
     func doInternalAuthentication( challenge: [UInt8], useExtendedMode: Bool ) async throws -> ResponseAPDU {
-        let randNonce = Data(challenge)
-        
-        var responseLength = 256
-        if useExtendedMode {
-            responseLength = 65535
-        }
-        
-        let cmd = NFCISO7816APDU(instructionClass: 00, instructionCode: 0x88, p1Parameter: 0, p2Parameter: 0, data: randNonce, expectedResponseLength: responseLength)
-
-        return try await send( cmd: cmd, useExtendedMode: useExtendedMode )
+        let command = APDUCommand.internalAuthentication(challenge: challenge, useExtendedMode: useExtendedMode)
+        return try await send(cmd: command, useExtendedMode: useExtendedMode)
     }
 
     func doMutualAuthentication( cmdData : Data ) async throws -> ResponseAPDU{
-        let cmd : NFCISO7816APDU = NFCISO7816APDU(instructionClass: 00, instructionCode: 0x82, p1Parameter: 0, p2Parameter: 0, data: cmdData, expectedResponseLength: 256)
-
-        return try await send( cmd: cmd )
+        try await send(cmd: APDUCommand.mutualAuthentication(data: cmdData))
     }
     
     /// The MSE KAT APDU, see EAC 1.11 spec, Section B.1.
@@ -75,14 +70,7 @@ public class TagReader {
     /// - Parameter completed the complete handler - returns the success response or an error
     func sendMSEKAT( keyData : Data, idData: Data? ) async throws -> ResponseAPDU {
         
-        var data = keyData
-        if let idData = idData {
-            data += idData
-        }
-        
-        let cmd : NFCISO7816APDU = NFCISO7816APDU(instructionClass: 00, instructionCode: 0x22, p1Parameter: 0x41, p2Parameter: 0xA6, data: data, expectedResponseLength: 256)
-        
-        return try await send( cmd: cmd )
+        try await send(cmd: APDUCommand.mseKeyAgreementTemplate(keyData: keyData, idData: idData))
     }
     
     /// The  MSE Set AT for Chip Authentication.
@@ -95,32 +83,11 @@ public class TagReader {
     /// - Parameter completed the complete handler - returns the success response or an error
     func sendMSESetATIntAuth( oid: String, keyId: Int? ) async throws -> ResponseAPDU {
         
-        let cmd : NFCISO7816APDU
-        let oidBytes = oidToBytes(oid: oid, replaceTag: true)
-        
-        if let keyId = keyId, keyId != 0 {
-            let keyIdBytes = wrapDO(b:0x84, arr:intToBytes(val:keyId, removePadding: true))
-            let data = oidBytes + keyIdBytes
-            
-            cmd = NFCISO7816APDU(instructionClass: 00, instructionCode: 0x22, p1Parameter: 0x41, p2Parameter: 0xA4, data: Data(data), expectedResponseLength: 256)
-            
-        } else {
-            cmd = NFCISO7816APDU(instructionClass: 00, instructionCode: 0x22, p1Parameter: 0x41, p2Parameter: 0xA4, data: Data(oidBytes), expectedResponseLength: 256)
-        }
-        
-        return try await send( cmd: cmd )
+        try await send(cmd: APDUCommand.mseSetATForInternalAuthentication(oid: oid, keyId: keyId))
     }
     
     func sendMSESetATMutualAuth( oid: String, keyType: UInt8 ) async throws -> ResponseAPDU {
-        
-        let oidBytes = oidToBytes(oid: oid, replaceTag: true)
-        let keyTypeBytes = wrapDO( b: 0x83, arr:[keyType])
-        
-        let data = oidBytes + keyTypeBytes
-            
-        let cmd = NFCISO7816APDU(instructionClass: 00, instructionCode: 0x22, p1Parameter: 0xC1, p2Parameter: 0xA4, data: Data(data), expectedResponseLength: -1)
-        
-        return try await send( cmd: cmd )
+        try await send(cmd: APDUCommand.mseSetATForMutualAuthentication(oid: oid, keyType: keyType))
     }
     
 
@@ -132,21 +99,21 @@ public class TagReader {
     /// - Parameter completed the complete handler - returns the dynamic authentication data without the {@code 0x7C} prefix (this method will remove it) or an error
     func sendGeneralAuthenticate( data : [UInt8], lengthExpected : Int = 256, isLast: Bool) async throws -> ResponseAPDU {
 
-        let wrappedData = wrapDO(b:0x7C, arr:data)
-        let commandData = Data(wrappedData)
+        let commandData = Data(wrapDO(b:0x7C, arr:data))
             
          // NOTE: Support of Protocol Response Data is CONDITIONAL:
          // It MUST be provided for version 2 but MUST NOT be provided for version 1.
          // So, we are expecting 0x7C (= tag), 0x00 (= length) here.
         
-        // 0x10 is class command chaining
-        let instructionClass : UInt8 = isLast ? 0x00 : 0x10
-        let INS_BSI_GENERAL_AUTHENTICATE : UInt8 = 0x86
-        
-        let cmd : NFCISO7816APDU = NFCISO7816APDU(instructionClass: instructionClass, instructionCode: INS_BSI_GENERAL_AUTHENTICATE, p1Parameter: 0x00, p2Parameter: 0x00, data: commandData, expectedResponseLength: lengthExpected)
         var response : ResponseAPDU
         do {
-            response = try await send( cmd: cmd )
+            response = try await send(
+                cmd: APDUCommand.generalAuthenticate(
+                    wrappedData: commandData,
+                    expectedResponseLength: lengthExpected,
+                    isLast: isLast
+                )
+            )
             response.data = try unwrapDO( tag:0x7c, wrappedData:response.data)
         } catch {
             // If wrong length error
@@ -154,8 +121,13 @@ public class TagReader {
                sw1 == 0x67, sw2 == 0x00 {
                 
                 // Resend
-                let cmd : NFCISO7816APDU = NFCISO7816APDU(instructionClass: instructionClass, instructionCode: INS_BSI_GENERAL_AUTHENTICATE, p1Parameter: 0x00, p2Parameter: 0x00, data: commandData, expectedResponseLength: 256)
-                response = try await send( cmd: cmd )
+                response = try await send(
+                    cmd: APDUCommand.generalAuthenticate(
+                        wrappedData: commandData,
+                        expectedResponseLength: 256,
+                        isLast: isLast
+                    )
+                )
                 response.data = try unwrapDO( tag:0x7c, wrappedData:response.data)
             } else {
                 throw error
@@ -169,10 +141,7 @@ public class TagReader {
         var resp = try await selectFile(tag: tag )
             
         // Read first 4 bytes of header to see how big the data structure is
-        guard let readHeaderCmd = NFCISO7816APDU(data:Data([0x00, 0xB0, 0x00, 0x00, 0x00, 0x00,0x04])) else {
-            throw NFCPassportReaderError.UnexpectedError
-        }
-        resp = try await self.send( cmd: readHeaderCmd )
+        resp = try await self.send(cmd: APDUCommand.readBinaryHeader())
 
         // Header looks like:  <tag><length of data><nextTag> e.g.60145F01 -
         // the total length is the 2nd value plus the two header 2 bytes
@@ -195,15 +164,9 @@ public class TagReader {
             let offset = intToBin(amountRead, pad:4)
 
             Logger.tagReader.debug( "TagReader - data bytes remaining: \(remaining), will read : \(readAmount)" )
-            let cmd = NFCISO7816APDU(
-                instructionClass: 00,
-                instructionCode: 0xB0,
-                p1Parameter: offset[0],
-                p2Parameter: offset[1],
-                data: Data(),
-                expectedResponseLength: readAmount
+            resp = try await self.send(
+                cmd: APDUCommand.readBinary(offset: offset, expectedResponseLength: readAmount)
             )
-            resp = try await self.send( cmd: cmd )
 
             Logger.tagReader.debug( "TagReader - got resp - \(binToHexRep(resp.data, asArray: true)), sw1 : \(resp.sw1), sw2 : \(resp.sw2)" )
             data += resp.data
@@ -228,9 +191,7 @@ public class TagReader {
         // By executing above SELECT command (with data=0x3F00) master file should be selected and you should be able to read EF.CardAccess from passport.
         
         // First select master file
-        let cmd : NFCISO7816APDU = NFCISO7816APDU(instructionClass: 0x00, instructionCode: 0xA4, p1Parameter: 0x00, p2Parameter: 0x0C, data: Data([0x3f,0x00]), expectedResponseLength: -1)
-        
-        _ = try await send( cmd: cmd)
+        _ = try await send(cmd: APDUCommand.selectMasterFile)
             
         // Now read EC.CardAccess
         let data = try await self.selectFileAndRead(tag: [0x01,0x1C])
@@ -240,21 +201,15 @@ public class TagReader {
     func selectPassportApplication() async throws -> ResponseAPDU {
         // Finally reselect the eMRTD application so the rest of the reading works as normal
         Logger.tagReader.debug( "Re-selecting eMRTD Application" )
-        let cmd : NFCISO7816APDU = NFCISO7816APDU(instructionClass: 0x00, instructionCode: 0xA4, p1Parameter: 0x04, p2Parameter: 0x0C, data: Data([0xA0, 0x00, 0x00, 0x02, 0x47, 0x10, 0x01]), expectedResponseLength: -1)
-        
-        let response = try await self.send( cmd: cmd)
+        let response = try await self.send(cmd: APDUCommand.selectPassportApplication)
         return response
     }
     
     func selectFile( tag: [UInt8] ) async throws -> ResponseAPDU {
-        
-        let data : [UInt8] = [0x00, 0xA4, 0x02, 0x0C, 0x02] + tag
-        let cmd = NFCISO7816APDU(data:Data(data))!
-        
-        return try await send( cmd: cmd )
+        try await send(cmd: APDUCommand.selectFile(tag))
     }
 
-    func send( cmd: NFCISO7816APDU, useExtendedMode : Bool = false ) async throws -> ResponseAPDU {
+    func send( cmd: APDU, useExtendedMode : Bool = false ) async throws -> ResponseAPDU {
         Logger.tagReader.debug( "TagReader - sending \(cmd)" )
         var toSend = cmd
         if let sm = secureMessaging {
@@ -262,17 +217,21 @@ public class TagReader {
             Logger.tagReader.debug("TagReader - [SM] \(toSend)" )
         }
         
-        var (data, sw1, sw2) = try await tag.sendCommand(apdu: toSend)
+        var transportResponse = try await transport.send(toSend)
+        var data = transportResponse.data
+        var sw1 = transportResponse.sw1
+        var sw2 = transportResponse.sw2
         Logger.tagReader.debug( "TagReader - Received response, size \(data.count)b" )
 
         // Some commands may have bigger response than expected. Read the whole response using INS 0xC0 (GET RESPONSE).
-        while (sw1 == 0x61) {
-            let getResponseCmd = NFCISO7816APDU(instructionClass: 0x0, instructionCode: 0xC0, p1Parameter: 0x0, p2Parameter: 0x0, data: Data(), expectedResponseLength: Int(sw2))
-            let nextSegment: Data
+        while sw1 == 0x61 {
+            let getResponseCmd = APDUCommand.getResponse(expectedResponseLength: Int(sw2))
             // Overwrite sw1 and sw2.
-            (nextSegment, sw1, sw2) = try await tag.sendCommand(apdu: getResponseCmd)
-            Logger.tagReader.debug("Read remaining data. Accumulated: \(data.count + nextSegment.count)b. Last batch \(nextSegment.count)b. Still remaining: \(sw2)b")
-            data += nextSegment
+            transportResponse = try await transport.send(getResponseCmd)
+            sw1 = transportResponse.sw1
+            sw2 = transportResponse.sw2
+            Logger.tagReader.debug("Read remaining data. Accumulated: \(data.count + transportResponse.data.count)b. Last batch \(transportResponse.data.count)b. Still remaining: \(sw2)b")
+            data += transportResponse.data
         }
 
         var rep = ResponseAPDU(data: [UInt8](data), sw1: sw1, sw2: sw2)
@@ -285,90 +244,12 @@ public class TagReader {
             
         }
         
-        if rep.sw1 != 0x90 && rep.sw2 != 0x00 {
-            Logger.tagReader.error( "Error reading tag: sw1 - 0x\(binToHexRep(sw1)), sw2 - 0x\(binToHexRep(sw2))" )
-            let tagError: NFCPassportReaderError
-            if (rep.sw1 == 0x63 && rep.sw2 == 0x00) {
-                tagError = NFCPassportReaderError.InvalidMRZKey
-            } else {
-                let errorMsg = self.decodeError(sw1: rep.sw1, sw2: rep.sw2)
-                Logger.tagReader.error( "reason: \(errorMsg)" )
-                tagError = NFCPassportReaderError.ResponseError( errorMsg, sw1, sw2 )
-            }
-            throw tagError
+        if !rep.isSuccess {
+            Logger.tagReader.error( "Error reading tag: sw1 - 0x\(binToHexRep(rep.sw1)), sw2 - 0x\(binToHexRep(rep.sw2))" )
+            Logger.tagReader.error( "reason: \(rep.status.description)" )
+            try rep.ensureSuccess()
         }
 
         return rep
     }
-
-    private func decodeError( sw1: UInt8, sw2:UInt8 ) -> String {
-
-        let errors : [UInt8 : [UInt8:String]] = [
-            0x62: [0x00:"No information given",
-                   0x81:"Part of returned data may be corrupted",
-                   0x82:"End of file/record reached before reading Le bytes",
-                   0x83:"Selected file invalidated",
-                   0x84:"FCI not formatted according to ISO7816-4 section 5.1.5"],
-            
-            0x63: [0x81:"File filled up by the last write",
-                   0x82:"Card Key not supported",
-                   0x83:"Reader Key not supported",
-                   0x84:"Plain transmission not supported",
-                   0x85:"Secured Transmission not supported",
-                   0x86:"Volatile memory not available",
-                   0x87:"Non Volatile memory not available",
-                   0x88:"Key number not valid",
-                   0x89:"Key length is not correct",
-                   0xC:"Counter provided by X (valued from 0 to 15) (exact meaning depending on the command)"],
-            0x65: [0x00:"No information given",
-                   0x81:"Memory failure"],
-            0x67: [0x00:"Wrong length"],
-            0x68: [0x00:"No information given",
-                   0x81:"Logical channel not supported",
-                   0x82:"Secure messaging not supported",
-                   0x83:"Last command of the chain expected",
-                   0x84:"Command chaining not supported"],
-            0x69: [0x00:"No information given",
-                   0x81:"Command incompatible with file structure",
-                   0x82:"Security status not satisfied",
-                   0x83:"Authentication method blocked",
-                   0x84:"Referenced data invalidated",
-                   0x85:"Conditions of use not satisfied",
-                   0x86:"Command not allowed (no current EF)",
-                   0x87:"Expected SM data objects missing",
-                   0x88:"SM data objects incorrect"],
-            0x6A: [0x00:"No information given",
-                   0x80:"Incorrect parameters in the data field",
-                   0x81:"Function not supported",
-                   0x82:"File not found",
-                   0x83:"Record not found",
-                   0x84:"Not enough memory space in the file",
-                   0x85:"Lc inconsistent with TLV structure",
-                   0x86:"Incorrect parameters P1-P2",
-                   0x87:"Lc inconsistent with P1-P2",
-                   0x88:"Referenced data not found"],
-            0x6B: [0x00:"Wrong parameter(s) P1-P2]"],
-            0x6D: [0x00:"Instruction code not supported or invalid"],
-            0x6E: [0x00:"Class not supported"],
-            0x6F: [0x00:"No precise diagnosis"],
-            0x90: [0x00:"Success"] //No further qualification
-        ]
-        
-        // Special cases - where sw2 isn't an error but contains a value
-        if sw1 == 0x61 {
-            return "SW2 indicates the number of response bytes still available - (\(sw2) bytes still available)"
-        } else if sw1 == 0x64 {
-            return "State of non-volatile memory unchanged (SW2=00, other values are RFU)"
-        } else if sw1 == 0x6C {
-            return "Wrong length Le: SW2 indicates the exact length - (exact length :\(sw2))"
-        }
-
-        if let dict = errors[sw1], let errorMsg = dict[sw2] {
-            return errorMsg
-        }
-        
-        return "Unknown error - sw1: 0x\(binToHexRep(sw1)), sw2 - 0x\(binToHexRep(sw2)) "
-    }
 }
-
-#endif

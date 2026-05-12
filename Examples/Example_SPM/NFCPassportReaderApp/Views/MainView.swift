@@ -188,7 +188,7 @@ extension MainView {
         let masterListURL = Bundle.main.url(forResource: "masterList", withExtension: ".pem")!
         passportReader.setMasterListURL( masterListURL )
         
-        // Set whether to use the new Passive Authentication verification method (default true) or the old OpenSSL CMS verifiction
+        // Legacy setting retained for compatibility while native CMS verification is rebuilt.
         passportReader.passiveAuthenticationUsesOpenSSL = !settings.useNewVerificationMethod
         
         // If we want to read only specific data groups we can using:
@@ -258,6 +258,5 @@ struct ContentView_Previews : PreviewProvider {
     }
 }
 #endif
-
 
 

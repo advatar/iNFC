@@ -5,7 +5,7 @@
 //
 
 import Foundation
-import OpenSSL
+import Security
 
 
 // Format of SOD: ASN1 - Signed Data  (taken from rfc5652 - https://tools.ietf.org/html/rfc5652):
@@ -64,7 +64,6 @@ class SOD : DataGroup {
     
     public private(set) var pkcs7CertificateData : [UInt8] = []
     private var asn1 : ASN1Item!
-    private var pubKey : OpaquePointer?
 
     override var datagroupType: DataGroupId { .SOD }
     
@@ -73,32 +72,24 @@ class SOD : DataGroup {
         self.pkcs7CertificateData = body
     }
     
-    deinit {
-        if ( pubKey != nil ) {
-            EVP_PKEY_free(pubKey);
-        }
-    }
-
     override func parse(_ data: [UInt8]) throws {
         let p = SimpleASN1DumpParser()
         asn1 = try p.parse(data: Data(body))
     }
     
     /// Returns the public key from the embedded X509 certificate
-    /// - Returns pointer to the public key
-    func getPublicKey( ) throws -> OpaquePointer {
-        
-        if let key = pubKey {
-            return key
+    /// - Returns provider-owned public key material.
+    func getPublicKey() throws -> PassportPublicKey {
+        guard let certificate = try getX509Certificates().first?.certificate,
+              let publicKey = SecCertificateCopyKey(certificate) else {
+            throw OpenSSLError.UnableToGetX509CertificateFromPKCS7("Unable to extract public key from SOD certificate")
         }
-        
-        let certs = try OpenSSLUtils.getX509CertificatesFromPKCS7(pkcs7Der:Data(pkcs7CertificateData))
-        if let key = X509_get_pubkey (certs[0].cert) {
-            pubKey = key
-            return key
-        }
-        
-        throw OpenSSLError.UnableToExtractSignedDataFromPKCS7("Unable to get public key")
+
+        return NativeSecPublicKey(secKey: publicKey)
+    }
+
+    func getX509Certificates() throws -> [X509Wrapper] {
+        try CMSCertificateExtractor.certificates(fromPKCS7DER: body)
     }
     
     
@@ -236,5 +227,131 @@ class SOD : DataGroup {
         // sha256WithRSAEncryption => default pkcs1
         // rsassaPss => pss        
         return signatureAlgo.value
+    }
+}
+
+@available(iOS 13, macOS 10.15, *)
+private enum CMSCertificateExtractor {
+    static func certificates(fromPKCS7DER data: [UInt8]) throws -> [X509Wrapper] {
+        var reader = CMSDERReader(bytes: data)
+        var contentInfo = try reader.readSequence()
+        _ = try contentInfo.readObjectIdentifierValue()
+        var explicitSignedData = try contentInfo.readConstructed(tag: 0xA0)
+        var signedData = try explicitSignedData.readSequence()
+
+        _ = try signedData.readAny()
+        _ = try signedData.readAny()
+        _ = try signedData.readAny()
+
+        guard signedData.peekTag() == 0xA0 else {
+            return []
+        }
+
+        let certificatesContent = try signedData.readConstructed(tag: 0xA0).remainingBytes()
+        var certificatesReader = CMSDERReader(bytes: certificatesContent)
+        var certificates: [X509Wrapper] = []
+
+        while !certificatesReader.isAtEnd {
+            let certificateDER = try certificatesReader.readEncodedValue(tag: 0x30)
+            if let certificate = X509Wrapper(der: certificateDER) {
+                certificates.append(certificate)
+            }
+        }
+
+        return certificates
+    }
+}
+
+@available(iOS 13, macOS 10.15, *)
+private struct CMSDERReader {
+    private let bytes: [UInt8]
+    private var offset: Int
+
+    init(bytes: [UInt8]) {
+        self.bytes = bytes
+        self.offset = 0
+    }
+
+    var isAtEnd: Bool {
+        offset == bytes.count
+    }
+
+    func remainingBytes() -> [UInt8] {
+        Array(bytes[offset..<bytes.count])
+    }
+
+    func peekTag() -> UInt8? {
+        guard offset < bytes.count else { return nil }
+        return bytes[offset]
+    }
+
+    mutating func readSequence() throws -> CMSDERReader {
+        CMSDERReader(bytes: try readValue(tag: 0x30).content)
+    }
+
+    mutating func readConstructed(tag: UInt8) throws -> CMSDERReader {
+        CMSDERReader(bytes: try readValue(tag: tag).content)
+    }
+
+    mutating func readObjectIdentifierValue() throws -> [UInt8] {
+        try readValue(tag: 0x06).content
+    }
+
+    mutating func readAny() throws -> [UInt8] {
+        try readValue(expectedTag: nil).encoded
+    }
+
+    mutating func readEncodedValue(tag: UInt8) throws -> [UInt8] {
+        try readValue(tag: tag).encoded
+    }
+
+    private mutating func readValue(tag expectedTag: UInt8) throws -> (encoded: [UInt8], content: [UInt8]) {
+        try readValue(expectedTag: expectedTag)
+    }
+
+    private mutating func readValue(expectedTag: UInt8?) throws -> (encoded: [UInt8], content: [UInt8]) {
+        let start = offset
+        guard offset < bytes.count else {
+            throw OpenSSLError.UnableToParseASN1("Missing DER tag")
+        }
+        let tag = bytes[offset]
+        if let expectedTag, tag != expectedTag {
+            throw OpenSSLError.UnableToParseASN1("Unexpected DER tag")
+        }
+        offset += 1
+        let length = try readLength()
+        let contentStart = offset
+        guard offset + length <= bytes.count else {
+            throw OpenSSLError.UnableToParseASN1("Truncated DER value")
+        }
+        offset += length
+        return (
+            Array(bytes[start..<offset]),
+            Array(bytes[contentStart..<contentStart + length])
+        )
+    }
+
+    private mutating func readLength() throws -> Int {
+        guard offset < bytes.count else {
+            throw OpenSSLError.UnableToParseASN1("Missing DER length")
+        }
+
+        let first = bytes[offset]
+        offset += 1
+        if first & 0x80 == 0 {
+            return Int(first)
+        }
+
+        let lengthByteCount = Int(first & 0x7F)
+        guard lengthByteCount > 0, offset + lengthByteCount <= bytes.count else {
+            throw OpenSSLError.UnableToParseASN1("Invalid DER length")
+        }
+
+        var length = 0
+        for _ in 0..<lengthByteCount {
+            length = (length << 8) | Int(bytes[offset])
+            offset += 1
+        }
+        return length
     }
 }

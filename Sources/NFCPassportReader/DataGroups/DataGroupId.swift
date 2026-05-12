@@ -29,8 +29,15 @@ public enum DataGroupId : Int, CaseIterable {
     case DG16 = 0x70
     case SOD = 0x77
     case Unknown = 0x00
-    
-    public func getName() -> String {
+
+    init?(tag: UInt8) {
+        guard let dataGroupId = DataGroupId(rawValue: Int(tag)), dataGroupId != .Unknown else {
+            return nil
+        }
+        self = dataGroupId
+    }
+
+    public var name: String {
         switch( self ) {
             case .COM: return "COM"
             case .DG1: return "DG1"
@@ -52,6 +59,42 @@ public enum DataGroupId : Int, CaseIterable {
             case .SOD: return "SOD"
             case .Unknown: return "Unknown"
         }
+    }
+
+    var legacyParserName: String {
+        switch self {
+        case .COM: return "Common"
+        case .SOD: return "SecurityData"
+        default: return name
+        }
+    }
+
+    var fileIDTag: [UInt8]? {
+        switch( self ) {
+            case .COM:  return [0x01,0x1E]
+            case .DG1:  return [0x01,0x01]
+            case .DG2:  return [0x01,0x02]
+            case .DG3:  return [0x01,0x03]
+            case .DG4:  return [0x01,0x04]
+            case .DG5:  return [0x01,0x05]
+            case .DG6:  return [0x01,0x06]
+            case .DG7:  return [0x01,0x07]
+            case .DG8:  return [0x01,0x08]
+            case .DG9:  return [0x01,0x09]
+            case .DG10:  return [0x01,0x0A]
+            case .DG11:  return [0x01,0x0B]
+            case .DG12:  return [0x01,0x0C]
+            case .DG13:  return [0x01,0x0D]
+            case .DG14:  return [0x01,0x0E]
+            case .DG15:  return [0x01,0x0F]
+            case .DG16:  return [0x01,0x10]
+            case .SOD:  return [0x01,0x1D]
+            case .Unknown:  return nil
+        }
+    }
+
+    public func getName() -> String {
+        name
     }
     
     static public func getIDFromName( name: String ) -> DataGroupId {
@@ -81,27 +124,6 @@ public enum DataGroupId : Int, CaseIterable {
     }
     
     func getFileIDTag() -> [UInt8]? {
-        switch( self ) {
-            case .COM:  return [0x01,0x1E]
-            case .DG1:  return [0x01,0x01]
-            case .DG2:  return [0x01,0x02]
-            case .DG3:  return [0x01,0x03]
-            case .DG4:  return [0x01,0x04]
-            case .DG5:  return [0x01,0x05]
-            case .DG6:  return [0x01,0x06]
-            case .DG7:  return [0x01,0x07]
-            case .DG8:  return [0x01,0x08]
-            case .DG9:  return [0x01,0x09]
-            case .DG10:  return [0x01,0x0A]
-            case .DG11:  return [0x01,0x0B]
-            case .DG12:  return [0x01,0x0C]
-            case .DG13:  return [0x01,0x0D]
-            case .DG14:  return [0x01,0x0E]
-            case .DG15:  return [0x01,0x0F]
-            case .DG16:  return [0x01,0x10]
-            case .SOD:  return [0x01,0x1D]
-            case .Unknown:  return nil
-        }
+        fileIDTag
     }
 }
-

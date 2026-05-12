@@ -69,8 +69,8 @@ public class PassportReader : NSObject {
     private var masterListURL : URL?
     private var shouldNotReportNextReaderSessionInvalidationErrorUserCanceled : Bool = false
 
-    // By default, Passive Authentication uses the new RFS5652 method to verify the SOD, but can be switched to use
-    // the previous OpenSSL CMS verification if necessary
+    // Legacy switch retained for API compatibility. CMS verification is currently disabled until
+    // the native SOD verifier replaces the removed C crypto implementation.
     public var passiveAuthenticationUsesOpenSSL : Bool = false
 
     public init( masterListURL: URL? = nil ) {
@@ -353,7 +353,7 @@ extension PassportReader {
 
         self.updateReaderSessionMessage( alertMessage: NFCViewDisplayMessage.readingDataGroupProgress(.COM, 0) )
         
-        if let com = try await readDataGroup(tagReader:tagReader, dgId:.COM) as? COM {
+        if let com = try await readDataGroup(tagReader: tagReader, dgId: .COM, as: COM.self) {
             self.passport.addDataGroup( .COM, dataGroup:com )
             self.addDatagroupsToRead(com: com, to: &DGsToRead)
         }
@@ -365,7 +365,7 @@ extension PassportReader {
                 DGsToRead.removeAll { $0 == .DG14 }
 
                 // Do Chip Authentication
-                if let dg14 = try await readDataGroup(tagReader:tagReader, dgId:.DG14) as? DataGroup14 {
+                if let dg14 = try await readDataGroup(tagReader: tagReader, dgId: .DG14, as: DataGroup14.self) {
                     self.passport.addDataGroup( .DG14, dataGroup:dg14 )
                     let caHandler = ChipAuthenticationHandler(dg14: dg14, tagReader: tagReader)
                      
@@ -403,6 +403,14 @@ extension PassportReader {
     }
     
     func readDataGroup( tagReader : TagReader, dgId : DataGroupId ) async throws -> DataGroup?  {
+        try await readDataGroup(tagReader: tagReader, dgId: dgId, as: DataGroup.self)
+    }
+
+    func readDataGroup<T: DataGroup>(
+        tagReader: TagReader,
+        dgId: DataGroupId,
+        as type: T.Type
+    ) async throws -> T? {
 
         self.currentlyReadingDataGroup = dgId
         Logger.passportReader.info( "Reading tag - \(dgId.getName())" )
@@ -414,48 +422,38 @@ extension PassportReader {
         repeat {
             do {
                 let response = try await tagReader.readDataGroup(dataGroup:dgId)
-                let dg = try DataGroupParser().parseDG(data: response)
-                return dg
+                return try DataGroupParser().parseDG(data: response, as: T.self)
             } catch let error as NFCPassportReaderError {
                 Logger.passportReader.error( "TagError reading tag - \(error)" )
                 nfcPassportReaderError = error
 
-                // OK we had an error - depending on what happened, we may want to try to re-read this
-                // E.g. we failed to read the last Datagroup because its protected and we can't
-                let errMsg = error.value
-                Logger.passportReader.error( "ERROR - \(errMsg)" )
-                var redoBAC = false
-                if errMsg == "Session invalidated" || errMsg == "Class not supported" || errMsg == "Tag connection lost" || errMsg == "Tag response error / no response" {
-                    // Check if we have done Chip Authentication, if so, set it to nil and try to redo BAC
-                    if self.caHandler != nil {
-                        self.caHandler = nil
-                        redoBAC = true
-                    } else {
-                        // Can't go any more!
-                        throw error
+                let recoveryAction = DataGroupReadRecoveryPolicy.action(
+                    for: error,
+                    hasChipAuthentication: self.caHandler != nil
+                )
+                Logger.passportReader.error("ERROR - \(error.value), recovery action: \(String(describing: recoveryAction))")
+
+                switch recoveryAction {
+                case .resetChipAuthenticationAndRedoBAC:
+                    self.caHandler = nil
+                    try await doBACAuthentication(tagReader: tagReader)
+                case .removeRequestedDataGroupAndRedoBAC:
+                    if !self.dataGroupsToRead.isEmpty {
+                        self.dataGroupsToRead.removeFirst()
                     }
-                } else if errMsg == "Security status not satisfied" || errMsg == "File not found" {
-                    // Can't read this element as we aren't allowed - remove it and return out so we re-do BAC
-                    self.dataGroupsToRead.removeFirst()
-                    redoBAC = true
-                } else if errMsg == "SM data objects incorrect" || errMsg == "Class not supported" {
-                    // Can't read this element security objects now invalid - and return out so we re-do BAC
-                    redoBAC = true
-                } else if errMsg.hasPrefix( "Wrong length" ) || errMsg.hasPrefix( "End of file" ) {  // Should now handle errors 0x6C xx, and 0x67 0x00
-                    // OK passport can't handle max length so drop it down
+                    try await doBACAuthentication(tagReader: tagReader)
+                case .redoBAC:
+                    try await doBACAuthentication(tagReader: tagReader)
+                case .reduceReadLengthAndRedoBAC:
                     tagReader.reduceDataReadingAmount()
-                    redoBAC = true
-                } else if errMsg == "UnsupportedDataGroup" {
-                    // OK, this DataGroup is not supported, lets skip it
+                    try await doBACAuthentication(tagReader: tagReader)
+                case .skipDataGroup:
                     Logger.passportReader.debug("Unsupported DataGroup - \(dgId.rawValue)")
                     return nil
-                }
-                
-                if redoBAC {
-                    // Redo BAC and try again
-                    try await doBACAuthentication(tagReader : tagReader)
-                } else {
-                    // Some other error lets have another try
+                case .fail:
+                    throw error
+                case .retry:
+                    break
                 }
             }
             readAttempts += 1

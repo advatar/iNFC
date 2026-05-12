@@ -1,0 +1,3 @@
+[submodule "deluca"]
+	path = deluca
+	url = https://github.com/andrea-deluca/NFCPassportReader.git

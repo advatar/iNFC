@@ -1,6 +1,4 @@
 import XCTest
-import CoreNFC
-import OpenSSL
 import OSLog
 
 @testable import NFCPassportReader
@@ -167,16 +165,15 @@ final class NFCPassportReaderTests: XCTestCase {
         let sm = SecureMessaging(ksenc: KSenc, ksmac: KSmac, ssc: ssc)
         
         let data : [UInt8] = [0x00, 0xA4, 0x02, 0x0C, 0x02, 0x01, 0x01, 0x00]
-        let apdu = NFCISO7816APDU(data:Data(data))!
+        let apdu = APDU(data: Data(data))!
         let protApdu = try! sm.protect( apdu: apdu )
         
-        XCTAssertNotNil(protApdu.data )
         XCTAssertEqual( protApdu.instructionClass, 0x0c )
         XCTAssertEqual( protApdu.instructionCode, 0xA4 )
         XCTAssertEqual( protApdu.p1Parameter, 0x02 )
         XCTAssertEqual( protApdu.p2Parameter, 0x0c )
         
-        let hexDataRep = binToHexRep( [UInt8](protApdu.data!))
+        let hexDataRep = binToHexRep( [UInt8](protApdu.data))
         XCTAssertEqual( hexDataRep, "870901CC69089F8F1AB4698E08B6334B3ABD5A9E09" )
         XCTAssertEqual( protApdu.expectedResponseLength, 0 )
     }
@@ -218,44 +215,54 @@ final class NFCPassportReaderTests: XCTestCase {
 
         }
     }
+
+    func testSecureMessagingRejectsInvalidAESResponseMAC() {
+        let key = hexRepToBin("2B7E151628AED2A6ABF7158809CF4F3C")
+        let initialSSC = hexRepToBin("0000000000000000")
+        let sm = SecureMessaging(encryptionAlgorithm: .AES, ksenc: key, ksmac: key, ssc: initialSSC)
+
+        let incrementedSSC = hexRepToBin("0000000000000001")
+        let do99: [UInt8] = [0x99, 0x02, 0x90, 0x00]
+        let macInput = pad([UInt8](repeating: 0, count: 8) + incrementedSSC + do99, blockSize: 16)
+        var checksum = [UInt8](aesMAC(key: key, msg: macInput).prefix(8))
+        checksum[0] ^= 0x01
+
+        let protectedResponse = ResponseAPDU(data: do99 + [0x8E, UInt8(checksum.count)] + checksum, sw1: 0x90, sw2: 0x00)
+
+        XCTAssertThrowsError(try sm.unprotect(rapdu: protectedResponse)) { error in
+            guard case NFCPassportReaderError.InvalidResponseChecksum = error else {
+                return XCTFail("Expected InvalidResponseChecksum, got \(error)")
+            }
+        }
+    }
     
     
-    func testConvertECDSAPlainTODer() {
+    func testSwiftASN1ParsesECDSASignatureDER() {
         let sigText = "67e147aac644325792dfa0b1615956dc4ed54e8cd859341571db98003431936e0651e9a3cdbcea3c8accd75a6f6bf07eb6bcf9ad1728e21aa854049e634e6fbf"
         let sig = hexRepToBin(sigText)
-        
-        let ecsig = ECDSA_SIG_new()
-        defer { ECDSA_SIG_free(ecsig) }
-        sig.withUnsafeBufferPointer { (unsafeBufPtr) in
-            let unsafePointer = unsafeBufPtr.baseAddress!
-            let r = BN_bin2bn(unsafePointer, 32, nil)
-            let s = BN_bin2bn(unsafePointer + 32, 32, nil)
-            ECDSA_SIG_set0(ecsig, r, s)
-        }
-        
-        //print( "Sig - \(ecsig)" )
-        
-        var derEncodedSignature: UnsafeMutablePointer<UInt8>? = nil
-        let derLength = i2d_ECDSA_SIG(ecsig, &derEncodedSignature)
+        let derBytes: [UInt8] = [0x30, 0x44, 0x02, 0x20] + Array(sig[0..<32]) + [0x02, 0x20] + Array(sig[32..<64])
 
-        var derBytes = [UInt8](repeating: 0, count: Int(derLength))
-        for b in 0..<Int(derLength) {
-            derBytes[b] = derEncodedSignature![b]
-        }
-
-        XCTAssertNoThrow(try OpenSSLUtils.ASN1Parse(data: Data(derBytes)), "Successfully parsed" )
+        XCTAssertNoThrow(try ASN1DERParser.dump(data: Data(derBytes)), "Successfully parsed")
     }
 
     
-    static var allTests = [
-        ("testBinToHexRep", testBinToHexRep),
-        ("testHexRepToBin", testHexRepToBin),
-        ("testAsn1Length", testAsn1Length),
-        ("testToASNLength", testToASNLength),
-        ("testDES3Encryption", testDES3Encryption),
-        ("testDES3Decryption", testDES3Decryption),
-        ("testSecureMessagingProtect", testSecureMessagingProtect),
-        ("testSecureMessagingUnprotectNoData", testSecureMessagingUnprotectNoData),
-        ("testSecureMessagingUnprotectWithData", testSecureMessagingUnprotectWithData),
-    ]
+    static var allTests: [(String, (NFCPassportReaderTests) -> () -> Void)] {
+        var tests: [(String, (NFCPassportReaderTests) -> () -> Void)] = [
+            ("testBinToHexRep", testBinToHexRep),
+            ("testHexRepToBin", testHexRepToBin),
+            ("testAsn1Length", testAsn1Length),
+            ("testToASNLength", testToASNLength),
+            ("testDES3Encryption", testDES3Encryption),
+            ("testDES3Decryption", testDES3Decryption),
+        ]
+
+        tests.append(contentsOf: [
+            ("testSecureMessagingProtect", testSecureMessagingProtect),
+            ("testSecureMessagingUnprotectNoData", testSecureMessagingUnprotectNoData),
+            ("testSecureMessagingUnprotectWithData", testSecureMessagingUnprotectWithData),
+            ("testSecureMessagingRejectsInvalidAESResponseMAC", testSecureMessagingRejectsInvalidAESResponseMAC),
+        ])
+
+        return tests
+    }
 }

@@ -7,7 +7,6 @@
 
 import Foundation
 import XCTest
-import OpenSSL
 
 @testable import NFCPassportReader
 
@@ -25,6 +24,33 @@ final class DataGroupParsingTests: XCTestCase {
         XCTAssertNoThrow(try dgp.parseDG(data: dg1)) { dg in
             XCTAssertNotNil(dg)
             XCTAssertTrue( dg is DataGroup1 )
+        }
+    }
+
+    func testGenericDatagroupParsing() throws {
+        let mrz = "P<GBRTHATCHER<<BOB<<<<<<<<<<<<<<<<<<<<<<<<<<7125143269GBR3906022M1601013<<<<<<<<<<<<<<08"
+        let mrzBin = [UInt8](mrz.data(using: .utf8)!)
+        let tag = try [0x5F,0x1F] + toAsn1Length(mrzBin.count) + mrzBin
+        let dg1Data = try [0x61] + toAsn1Length(tag.count) + tag
+
+        let dg1: DataGroup1 = try DataGroupParser().parseDG(data: dg1Data, as: DataGroup1.self)
+
+        XCTAssertEqual(dg1.datagroupType, .DG1)
+    }
+
+    func testGenericDatagroupParsingFailsForUnexpectedConcreteType() throws {
+        let mrz = "P<GBRTHATCHER<<BOB<<<<<<<<<<<<<<<<<<<<<<<<<<7125143269GBR3906022M1601013<<<<<<<<<<<<<<08"
+        let mrzBin = [UInt8](mrz.data(using: .utf8)!)
+        let tag = try [0x5F,0x1F] + toAsn1Length(mrzBin.count) + mrzBin
+        let dg1Data = try [0x61] + toAsn1Length(tag.count) + tag
+
+        XCTAssertThrowsError(try DataGroupParser().parseDG(data: dg1Data, as: DataGroup2.self)) { error in
+            guard case NFCPassportReaderError.InvalidDataPassed(let reason) = error else {
+                return XCTFail("Expected InvalidDataPassed, got \(error)")
+            }
+
+            XCTAssertTrue(reason.contains("Expected DataGroup2"))
+            XCTAssertTrue(reason.contains("DataGroup1"))
         }
     }
     
@@ -119,7 +145,8 @@ final class DataGroupParsingTests: XCTestCase {
             XCTAssertTrue( dg is DataGroup15 )
 
             let dg15 = dg as? DataGroup15
-            XCTAssertTrue( dg15?.ecdsaPublicKey != nil || dg15?.rsaPublicKey != nil )
+            XCTAssertNotNil(dg15?.activeAuthenticationPublicKey)
+            XCTAssertEqual(dg15?.activeAuthenticationKeyAlgorithm, .ecdsa)
         }
     }
 
